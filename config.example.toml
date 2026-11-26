@@ -1,0 +1,118 @@
+# mcr configuration — every value below is the default.
+# Location: $MCR_CONFIG, or $XDG_CONFIG_HOME/mcr/config.toml
+
+[ui]
+# "auto" (follow the terminal), "dark", "light" or a [themes.<name>] below.
+theme = "auto"
+# "auto" (from $COLORTERM), "truecolor" or "256".
+color = "auto"
+# "columns": source | result | target.  "stacked": source | target over result.
+layout = "columns"
+# Relative widths of the source, result and target panes.
+panel_ratio = [1, 1, 1]
+# Height share of the result pane in the stacked layout.
+stacked_result_percent = 45
+# Git history panel (author, date, commit) for the line under the cursor.
+show_info = true
+info_height = 7
+line_numbers = true
+# Overview column marking where changes and open conflicts are.
+minimap = true
+mouse = true
+# ASCII markers for terminals / fonts without Unicode symbols.
+ascii = false
+tab_width = 4
+scrolloff = 3
+# Jump to the next unresolved hunk after resolving one.
+auto_advance = false
+
+[git]
+# Run `git add` on a file once it is saved with every hunk resolved.
+auto_stage = true
+# Keep the previous working-tree file under .git/mcr-backup/ on first save.
+backup = true
+
+# Keys: `action = "key"` or `action = ["key", "other"]`; `[]` unbinds.
+# Keys look like: j  G  space  enter  ctrl-d  alt-x  shift-tab  f5  <c-d>
+# A binding may be a sequence: "g g", "] c".
+[keys]
+
+# Navigation
+cursor_down            = ["j", "down"]  # Move down one line
+cursor_up              = ["k", "up"]  # Move up one line
+half_page_down         = ["ctrl-d"]  # Move down half a page
+half_page_up           = ["ctrl-u"]  # Move up half a page
+page_down              = ["ctrl-f", "pagedown"]  # Move down one page
+page_up                = ["ctrl-b", "pageup"]  # Move up one page
+goto_top               = ["g g", "home"]  # Jump to the first line
+goto_bottom            = ["G", "end"]  # Jump to the last line
+next_hunk              = ["J"]  # Jump to the next change
+prev_hunk              = ["K"]  # Jump to the previous change
+next_conflict          = ["n", "] c"]  # Jump to the next unresolved hunk
+prev_conflict          = ["N", "[ c"]  # Jump to the previous unresolved hunk
+focus_left             = ["h", "left"]  # Focus the pane to the left
+focus_right            = ["l", "right"]  # Focus the pane to the right
+focus_next             = ["tab"]  # Cycle pane focus forward
+focus_prev             = ["shift-tab"]  # Cycle pane focus backward
+scroll_left            = ["H"]  # Scroll text left
+scroll_right           = ["L"]  # Scroll text right
+
+# Resolve lines
+toggle_accept_line     = ["space"]  # Accept the line under the cursor (again: undecide)
+toggle_reject_line     = ["x"]  # Reject the line under the cursor (again: undecide)
+
+# Resolve hunks
+take_hunk              = ["enter"]  # Take the focused side's hunk (result pane: finish a line-by-line pick)
+take_source            = ["s"]  # Take the source hunk
+take_target            = ["t"]  # Take the target hunk
+take_both              = ["b"]  # Take both: source, then target
+take_both_reversed     = ["B"]  # Take both: target, then source
+take_none              = ["d"]  # Take neither side
+resolve_remaining      = ["c"]  # Reject the hunk's pending lines, keep accepted ones
+reset_hunk             = ["r"]  # Reset the hunk to its initial state
+edit_hunk              = ["e"]  # Edit the hunk's result in $EDITOR
+take_all_source        = ["S"]  # Take source for every unresolved hunk
+take_all_target        = ["T"]  # Take target for every unresolved hunk
+
+# History & files
+undo                   = ["u", "z"]  # Undo the last change
+redo                   = ["ctrl-r", "Z"]  # Redo the last undone change
+save                   = ["w", "ctrl-s"]  # Write the file (and stage it once fully resolved)
+save_all               = ["W"]  # Write every modified file
+next_file              = ["] f"]  # Open the next conflicted file
+prev_file              = ["[ f"]  # Open the previous conflicted file
+file_picker            = ["f"]  # Choose a conflicted file
+
+# View
+toggle_theme           = ["ctrl-t"]  # Switch to the next theme
+toggle_layout          = ["v"]  # Switch between column and stacked layout
+toggle_info            = ["i"]  # Show or hide the git history panel
+grow_center            = ["+"]  # Widen the result pane
+shrink_center          = ["-"]  # Narrow the result pane
+reset_layout           = ["="]  # Restore the configured pane sizes
+help                   = ["?"]  # Show this help
+cancel                 = ["esc"]  # Close a dialog / clear a pending key
+quit                   = ["q", "ctrl-c"]  # Quit
+
+# Themes: override colors of a built-in theme, or define your own.
+# `base` is "dark" (default) or "light"; `tint` is the opacity (0–1) of
+# diff and conflict backgrounds. Colors are "#rrggbb".
+#
+# [themes.midnight]
+# base = "dark"
+# tint = 0.20
+# bg         = "#1e1e1e"
+# surface    = "#2a2a2a"
+# fg         = "#e0e0e0"
+# muted      = "#8a8a8a"
+# border     = "#424242"
+# accent     = "#82b1ff"
+# source     = "#64b5f6"
+# target     = "#ba68c8"
+# added      = "#81c784"
+# removed    = "#e57373"
+# modified   = "#ffd54f"
+# conflict   = "#ff8a65"
+# accepted   = "#81c784"
+# rejected   = "#e57373"
+# unresolved = "#ffb74d"

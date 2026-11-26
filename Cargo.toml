@@ -1,0 +1,36 @@
+[package]
+name = "merge-conflict-resolver"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "mcr — a keyboard-first, three-pane Git merge conflict resolver for the terminal"
+readme = "README.md"
+keywords = ["git", "merge", "tui", "conflict", "diff3"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "mcr"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mcr"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+ratatui = "0.29"
+similar = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+unicode-width = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
