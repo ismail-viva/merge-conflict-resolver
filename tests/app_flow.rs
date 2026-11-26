@@ -329,16 +329,20 @@ fn the_screen_shows_all_three_panes_and_the_resolution_state() {
     let text = screen(&mut app);
     for needle in [
         "SOURCE",
-        "feature (theirs)",
+        "feature",
+        "theirs",
+        "merged",
         "RESULT",
         "file.txt",
         "TARGET",
-        "main (ours)",
+        "main",
+        "ours",
         "two from feature",
         "two from main",
         "? unresolved · 3 lines pending",
-        "1 of 3 hunks unresolved",
-        "file 1/2",
+        "2/3 hunks",
+        "file.txt  1",
+        "other.txt ?",
         "Hunk 2/3 · conflict · 3 lines pending",
     ] {
         assert!(text.contains(needle), "missing `{needle}` in:\n{text}");
@@ -346,7 +350,7 @@ fn the_screen_shows_all_three_panes_and_the_resolution_state() {
     press(&mut app, "s");
     let text = screen(&mut app);
     assert!(
-        text.contains("all 3 hunks resolved") && text.contains("unsaved"),
+        text.contains("3/3 hunks") && text.contains("unsaved") && text.contains("file.txt ✓"),
         "{text}"
     );
     assert!(text.contains("◀"), "result lines show their origin");
@@ -566,4 +570,67 @@ fn defaults_are_tokyo_night_with_icons_and_only_the_current_line_stands_out() {
         text.contains('\u{e0a0}') && text.contains('\u{f128}'),
         "nerd font icons are used"
     );
+}
+
+#[test]
+fn panes_are_borderless_and_only_the_focused_header_is_underlined_in_color() {
+    let repo = TestRepo::conflicted();
+    let mut app = app(&repo);
+    let dark = Theme::dark();
+    let rgb = |c: Rgb| Color::Rgb(c.0, c.1, c.2);
+    let terminal = render(&mut app, 140, 40);
+    let buffer = terminal.backend().buffer();
+    let [source, result, target] = app.geometry.panes;
+
+    // Title, tabs, header and rule sit above the text; nothing frames it.
+    assert_eq!((source.x, source.y), (0, 4));
+    assert_eq!(result.bottom(), 39, "text runs down to the status bar");
+    assert_eq!(
+        source.right() + 1,
+        result.x,
+        "one divider column between panes"
+    );
+    let text = screen(&mut app);
+    assert!(!text.contains('╭') && !text.contains('╰'), "{text}");
+
+    let rule = |area: ratatui::layout::Rect| &buffer[(area.x + 3, area.y - 1)];
+    assert_eq!(rule(result).symbol(), "▔");
+    assert_eq!(
+        rule(result).fg,
+        rgb(dark.accent),
+        "the result pane has the focus"
+    );
+    assert_eq!(rule(source).fg, rgb(dark.border));
+    assert_eq!(rule(target).fg, rgb(dark.border));
+}
+
+#[test]
+fn the_current_file_tab_stays_visible_and_hints_never_get_cut() {
+    let repo = TestRepo::conflicted();
+    let mut app = app(&repo);
+    press(&mut app, "] f");
+    let row = |app: &mut App, width: u16, y: u16| {
+        let terminal = render(app, width, 20);
+        let buffer = terminal.backend().buffer();
+        (0..width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect::<String>()
+    };
+    assert!(
+        row(&mut app, 24, 1).contains("other.txt"),
+        "tabs scroll to the current file"
+    );
+    for width in [40, 70, 100] {
+        let status = row(&mut app, width, 19);
+        for word in status.split_whitespace() {
+            let whole = [
+                "accept", "reject", "take", "hunk", "both", "next", "undo", "save", "help", "quit",
+            ];
+            let is_hint_word = whole.iter().any(|w| w.starts_with(word) && word.len() > 2);
+            assert!(
+                !is_hint_word || whole.contains(&word),
+                "`{word}` is cut off in: {status}"
+            );
+        }
+    }
 }

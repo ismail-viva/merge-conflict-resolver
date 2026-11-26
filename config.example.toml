@@ -16,7 +16,7 @@ panel_ratio = [1, 1, 1]
 stacked_result_percent = 45
 line_numbers = true
 # Overview column marking where changes and open conflicts are.
-minimap = true
+minimap = false
 mouse = true
 # "nerd" (Nerd Font icons), "unicode" (plain symbols) or "ascii".
 icons = "nerd"

@@ -55,6 +55,12 @@ pub struct Symbols {
     pub arrow: &'static str,
     pub dot: &'static str,
     pub minimap: &'static str,
+    /// Rule under a pane header.
+    pub rule: &'static str,
+    /// Vertical divider between panes.
+    pub separator: &'static str,
+    /// One cell of the progress bar.
+    pub progress: &'static str,
     /// Rounded ends of "pill" labels; empty when the font has none.
     pub cap_left: &'static str,
     pub cap_right: &'static str,
@@ -86,6 +92,9 @@ impl Symbols {
         arrow: "\u{f061}",
         dot: "\u{f111}",
         minimap: "▐",
+        rule: "▔",
+        separator: "│",
+        progress: "━",
         cap_left: "\u{e0b6}",
         cap_right: "\u{e0b4}",
         app: "\u{e727}",
@@ -113,6 +122,9 @@ impl Symbols {
         arrow: "→",
         dot: "●",
         minimap: "▐",
+        rule: "▔",
+        separator: "│",
+        progress: "━",
         cap_left: "",
         cap_right: "",
         app: "",
@@ -140,6 +152,9 @@ impl Symbols {
         arrow: "->",
         dot: "*",
         minimap: "|",
+        rule: "-",
+        separator: "|",
+        progress: "=",
         success: "+",
         error: "x",
         ..Symbols::UNICODE
@@ -183,6 +198,9 @@ fn pill<'a>(text: String, color: Rgb, on: Rgb, p: &Palette, symbols: &Symbols) -
     ]
 }
 
+/// Rows a pane spends on its header strip and the rule under it.
+const PANE_HEADER: u16 = 2;
+
 /// Draw one frame.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -194,9 +212,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let symbols = Symbols::for_config(app.config.ui.icons);
     frame.buffer_mut().set_style(area, palette.base());
 
-    let [title, body, status] = Layout::vertical([
+    let [title, tabs, body, status] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Min(3),
+        Constraint::Length(1),
+        Constraint::Min(PANE_HEADER + 1),
         Constraint::Length(1),
     ])
     .areas(area);
@@ -206,12 +225,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Layout::horizontal([Constraint::Min(0), Constraint::Length(minimap_width)]).areas(body);
     let outer = pane_areas(app, body);
 
-    // Frame the panes first: their inner areas define this frame's geometry.
+    // Headers first: what is left below them defines this frame's geometry.
     let mut inner = [Rect::default(); 3];
     for pane in Pane::ALL {
-        let block = pane_block(app, pane, &palette, symbols);
-        inner[pane.index()] = block.inner(outer[pane.index()]);
-        frame.render_widget(block, outer[pane.index()]);
+        inner[pane.index()] =
+            draw_pane_header(frame, outer[pane.index()], app, pane, &palette, symbols);
     }
     let height = inner.iter().map(|r| r.height).min().unwrap_or(0) as usize;
     app.geometry = Geometry {
@@ -221,6 +239,25 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let scrolloff = app.config.ui.scrolloff as usize;
     if let Some(view) = app.files[app.current].view.as_mut() {
         view.ensure_visible(height, scrolloff);
+    }
+
+    // A quiet divider in the one-column gap between neighbouring panes.
+    let neighbours: &[(Pane, Pane)] = match app.layout {
+        LayoutMode::Columns => &[(Pane::Source, Pane::Result), (Pane::Result, Pane::Target)],
+        LayoutMode::Stacked => &[(Pane::Source, Pane::Target)],
+    };
+    for (left, right) in neighbours {
+        let (left, right) = (inner[left.index()], inner[right.index()]);
+        if left.right() < right.x {
+            for y in left.y..left.bottom() {
+                frame.buffer_mut().set_string(
+                    left.right(),
+                    y,
+                    symbols.separator,
+                    palette.style(theme.surface, theme.bg),
+                );
+            }
+        }
     }
 
     if let Some(view) = app.view() {
@@ -237,11 +274,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             frame.render_widget(widget, inner[pane.index()]);
         }
         if minimap.width > 0 {
-            draw_minimap(frame.buffer_mut(), minimap, view, &palette, symbols);
+            let track = Rect {
+                y: minimap.y + PANE_HEADER.min(minimap.height),
+                height: minimap.height.saturating_sub(PANE_HEADER),
+                ..minimap
+            };
+            draw_minimap(frame.buffer_mut(), track, view, &palette, symbols);
         }
     }
 
     draw_title(frame, title, app, &palette, symbols);
+    draw_tabs(frame, tabs, app, &palette, symbols);
     draw_status(frame, status, app, &palette, symbols);
 
     match app.mode {
@@ -261,6 +304,7 @@ fn pane_areas(app: &App, body: Rect) -> [Rect; 3] {
             Constraint::Fill(r),
             Constraint::Fill(t),
         ])
+        .spacing(1)
         .areas(body),
         LayoutMode::Stacked => {
             let percent = app.config.ui.stacked_result_percent.clamp(10, 90);
@@ -269,70 +313,106 @@ fn pane_areas(app: &App, body: Rect) -> [Rect; 3] {
                 Constraint::Percentage(percent),
             ])
             .areas(body);
-            let [source, target] =
-                Layout::horizontal([Constraint::Fill(s), Constraint::Fill(t)]).areas(top);
+            let [source, target] = Layout::horizontal([Constraint::Fill(s), Constraint::Fill(t)])
+                .spacing(1)
+                .areas(top);
             [source, bottom, target]
         }
     }
 }
 
-/// Name, detail text and identity color of a pane.
-fn pane_identity(app: &App, pane: Pane, theme: &Theme) -> (&'static str, String, Rgb) {
+/// What a pane is called, what it shows and its identity color.
+struct PaneIdentity {
+    name: &'static str,
+    detail: String,
+    /// The pane's role in git's terms.
+    role: &'static str,
+    color: Rgb,
+}
+
+fn pane_identity(app: &App, pane: Pane, theme: &Theme) -> PaneIdentity {
     match pane {
-        Pane::Source => (
-            "SOURCE",
-            format!("{} (theirs)", app.context.source_label),
-            theme.source,
-        ),
-        Pane::Result => ("RESULT", app.current_path().to_owned(), theme.accent),
-        Pane::Target => (
-            "TARGET",
-            format!("{} (ours)", app.context.target_label),
-            theme.target,
-        ),
+        Pane::Source => PaneIdentity {
+            name: "SOURCE",
+            detail: app.context.source_label.clone(),
+            role: "theirs",
+            color: theme.source,
+        },
+        Pane::Result => PaneIdentity {
+            name: "RESULT",
+            detail: app.current_path().to_owned(),
+            role: "merged",
+            color: theme.accent,
+        },
+        Pane::Target => PaneIdentity {
+            name: "TARGET",
+            detail: app.context.target_label.clone(),
+            role: "ours",
+            color: theme.target,
+        },
     }
 }
 
-fn pane_block<'a>(app: &App, pane: Pane, p: &Palette, symbols: &Symbols) -> Block<'a> {
+/// Draw a pane's header strip and the rule under it; returns the area left
+/// for the pane's text.
+fn draw_pane_header(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    pane: Pane,
+    p: &Palette,
+    symbols: &Symbols,
+) -> Rect {
     let theme = p.theme;
     let focused = app.focus == pane;
-    let (name, detail, color) = pane_identity(app, pane, theme);
+    let id = pane_identity(app, pane, theme);
     let glyph = match pane {
         Pane::Result => symbols.merge,
         _ => symbols.branch,
     };
-    let label = format!(" {}{name} ", icon(glyph));
-    let mut title = vec![Span::raw(" ")];
-    if focused {
-        title.extend(pill(label, color, theme.bg, p, symbols));
-    } else {
-        title.push(Span::styled(
-            label,
-            p.style(color, theme.bg).add_modifier(Modifier::BOLD),
-        ));
+    let on = |color: Rgb| p.style(color, theme.bg);
+
+    if area.height >= 1 {
+        let strip = Rect { height: 1, ..area };
+        let role = Span::styled(format!("{} ", id.role), on(theme.muted));
+        let role_width = (role.width() as u16).min(strip.width);
+        let [left, right] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(role_width)]).areas(strip);
+        let title = Line::from(vec![
+            Span::styled(
+                format!(" {}{} ", icon(glyph), id.name),
+                on(id.color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {}  ", id.detail),
+                on(if focused { theme.fg } else { theme.muted }),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(title).style(p.base()), left);
+        frame.render_widget(Paragraph::new(role).style(p.base()), right);
     }
-    let detail_color = if focused { theme.fg } else { theme.muted };
-    title.push(Span::styled(
-        format!(" {detail} "),
-        p.style(detail_color, theme.bg),
-    ));
-    Block::bordered()
-        .border_type(border_type(app.config.ui.icons))
-        .border_style(p.style(if focused { color } else { theme.border }, theme.bg))
-        .style(p.base())
-        .title(Line::from(title))
+    if area.height >= 2 {
+        // The focused pane is underlined in its own color.
+        let color = if focused { id.color } else { theme.border };
+        frame.buffer_mut().set_string(
+            area.x,
+            area.y + 1,
+            symbols.rule.repeat(area.width as usize),
+            on(color),
+        );
+    }
+    Rect {
+        y: area.y + PANE_HEADER.min(area.height),
+        height: area.height.saturating_sub(PANE_HEADER),
+        ..area
+    }
 }
 
 /// Overview of the whole file: where the changes and open conflicts are.
 fn draw_minimap(buf: &mut Buffer, area: Rect, view: &FileView, p: &Palette, symbols: &Symbols) {
     let theme = p.theme;
     let total = view.rows.total().max(1);
-    // Skip the rows taken by the pane borders.
-    let track = Rect {
-        y: area.y + 1,
-        height: area.height.saturating_sub(2),
-        ..area
-    };
+    let track = area;
     let cells = track.height as usize;
     if cells == 0 {
         return;
@@ -376,6 +456,7 @@ fn draw_minimap(buf: &mut Buffer, area: Rect, view: &FileView, p: &Palette, symb
 }
 
 fn draw_title(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &Symbols) {
+    const BAR_WIDTH: usize = 20;
     let theme = p.theme;
     let bar = p.bar();
     let on_bar = |color: Rgb| p.style(color, theme.surface);
@@ -389,27 +470,20 @@ fn draw_title(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &S
         symbols,
     );
     left.extend([
-        Span::styled(format!("  {} ", app.context.operation), on_bar(theme.muted)),
+        Span::styled(
+            format!("  {}  ", app.context.operation),
+            on_bar(theme.muted),
+        ),
         Span::styled(
             format!("{}{}", icon(symbols.branch), app.context.source_label),
             on_bar(theme.source).add_modifier(bold),
         ),
-        Span::styled(format!(" {} ", symbols.arrow), on_bar(theme.muted)),
+        Span::styled(format!("  {}  ", symbols.arrow), on_bar(theme.muted)),
         Span::styled(
             format!("{}{}", icon(symbols.branch), app.context.target_label),
             on_bar(theme.target).add_modifier(bold),
         ),
-        Span::styled(
-            format!("   {}{}", icon(symbols.file), app.current_path()),
-            on_bar(theme.fg),
-        ),
     ]);
-    if app.files.len() > 1 {
-        left.push(Span::styled(
-            format!("  file {}/{}", app.current + 1, app.files.len()),
-            on_bar(theme.muted),
-        ));
-    }
 
     let mut right = Vec::new();
     if let Some(view) = app.view() {
@@ -423,32 +497,28 @@ fn draw_title(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &S
             (false, None) => (String::new(), theme.muted),
         };
         if !text.is_empty() {
-            right.push(Span::styled(format!("{text}  "), on_bar(color)));
+            right.push(Span::styled(format!("{text}   "), on_bar(color)));
         }
+        // Progress of this file: resolved hunks out of all changed hunks.
         let stats = view.session.stats();
-        let (text, color) = if stats.open == 0 {
-            (
-                format!(
-                    " {} all {} hunks resolved ",
-                    symbols.accepted, stats.changes
-                ),
-                theme.accepted,
-            )
-        } else {
-            (
-                format!(
-                    " {} {} of {} hunks unresolved ",
-                    symbols.unresolved, stats.open, stats.changes
-                ),
-                theme.unresolved,
-            )
-        };
-        right.extend(pill(text, color, theme.surface, p, symbols));
+        let resolved = stats.changes - stats.open;
+        let filled = (resolved * BAR_WIDTH)
+            .checked_div(stats.changes)
+            .unwrap_or(BAR_WIDTH);
+        let done = stats.open == 0;
+        right.push(Span::styled(
+            symbols.progress.repeat(filled),
+            on_bar(theme.accepted),
+        ));
+        right.push(Span::styled(
+            symbols.progress.repeat(BAR_WIDTH - filled),
+            on_bar(theme.border),
+        ));
+        right.push(Span::styled(
+            format!("  {resolved}/{} hunks ", stats.changes),
+            on_bar(if done { theme.accepted } else { theme.fg }).add_modifier(bold),
+        ));
     }
-    right.push(Span::styled(
-        format!("  {} ", theme.name),
-        on_bar(theme.muted),
-    ));
 
     let right = Line::from(right);
     let right_width = (right.width() as u16).min(area.width);
@@ -457,6 +527,65 @@ fn draw_title(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &S
     frame.buffer_mut().set_style(area, bar);
     frame.render_widget(Paragraph::new(Line::from(left)).style(bar), left_area);
     frame.render_widget(Paragraph::new(right).style(bar), right_area);
+}
+
+/// One tab per conflicted file, with what is left to do in it.
+fn draw_tabs(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &Symbols) {
+    let theme = p.theme;
+    frame.buffer_mut().set_style(area, p.bar());
+
+    let mut tabs: Vec<Vec<Span>> = Vec::new();
+    for (index, file) in app.files.iter().enumerate() {
+        let current = index == app.current;
+        let bg = if current { theme.bg } else { theme.surface };
+        let mut name = p.style(if current { theme.fg } else { theme.muted }, bg);
+        if current {
+            name = name.add_modifier(Modifier::BOLD);
+        }
+        let mut tab = vec![Span::styled(
+            format!(" {}{} ", icon(symbols.file), file.entry.path),
+            name,
+        )];
+        let open = file.view.as_ref().map(|view| view.session.stats().open);
+        tab.push(match (&file.entry.unsupported, open) {
+            (Some(_), _) => {
+                Span::styled(format!("{} ", symbols.rejected), p.style(theme.muted, bg))
+            }
+            (None, None) => Span::styled(
+                format!("{} ", symbols.unresolved),
+                p.style(theme.unresolved, bg),
+            ),
+            (None, Some(0)) => Span::styled(
+                format!("{} ", symbols.accepted),
+                p.style(theme.accepted, bg),
+            ),
+            (None, Some(n)) if current => Span::styled(
+                format!(" {n} "),
+                p.style(theme.bg, theme.conflict)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            (None, Some(n)) => Span::styled(format!(" {n} "), p.style(theme.conflict, bg)),
+        });
+        tab.push(Span::styled(" ", p.style(theme.fg, bg)));
+        tabs.push(tab);
+    }
+
+    // Keep the current tab on screen: drop tabs from the left until it fits.
+    let tab_width = |tab: &Vec<Span>| tab.iter().map(Span::width).sum::<usize>();
+    let mut first = 0;
+    while first < app.current
+        && tabs[first..=app.current]
+            .iter()
+            .map(tab_width)
+            .sum::<usize>()
+            + 1
+            > area.width as usize
+    {
+        first += 1;
+    }
+    let mut spans = vec![Span::styled(" ", p.bar())];
+    spans.extend(tabs.into_iter().skip(first).flatten());
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(p.bar()), area);
 }
 
 /// "Hunk 2/5 · conflict · 3 lines pending" for the hunk under the cursor.
@@ -545,9 +674,17 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &
         Layout::horizontal([Constraint::Min(0), Constraint::Length(right_width)]).areas(area);
     frame.render_widget(Paragraph::new(right).style(bar), right_area);
 
-    let (name, _, color) = pane_identity(app, app.focus, theme);
-    let mut left = pill(format!(" {name} "), color, theme.surface, p, symbols);
+    let id = pane_identity(app, app.focus, theme);
+    let mut left = pill(
+        format!(" {} ", id.name),
+        id.color,
+        theme.surface,
+        p,
+        symbols,
+    );
     left.push(Span::styled(" ", bar));
+    let used: usize = left.iter().map(Span::width).sum();
+    let room = (left_area.width as usize).saturating_sub(used);
     match &app.message {
         Some(message) => {
             let (glyph, color) = match message.level {
@@ -565,12 +702,13 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &
                 style,
             ));
         }
-        None => left.extend(hints(app, p)),
+        None => left.extend(hints(app, p, room)),
     }
     frame.render_widget(Paragraph::new(Line::from(left)).style(bar), left_area);
 }
 
-fn hints<'a>(app: &App, p: &Palette) -> Vec<Span<'a>> {
+/// Key hints, as many whole ones as fit into `room` columns.
+fn hints<'a>(app: &App, p: &Palette, room: usize) -> Vec<Span<'a>> {
     let theme = p.theme;
     const HINTS: &[(Action, &str)] = &[
         (Action::ToggleAcceptLine, "accept"),
@@ -584,10 +722,16 @@ fn hints<'a>(app: &App, p: &Palette) -> Vec<Span<'a>> {
         (Action::Quit, "quit"),
     ];
     let mut spans = Vec::new();
+    let mut used = 0;
     for (action, label) in HINTS {
         let Some(key) = app.config.keymap.hint(*action) else {
             continue;
         };
+        let width = key.chars().count() + label.len() + 4;
+        if used + width > room {
+            break;
+        }
+        used += width;
         spans.push(Span::styled(
             key,
             p.style(theme.accent, theme.surface)

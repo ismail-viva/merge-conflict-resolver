@@ -69,7 +69,7 @@ impl Default for UiConfig {
             panel_ratio: [1, 1, 1],
             stacked_result_percent: 45,
             line_numbers: true,
-            minimap: true,
+            minimap: false,
             mouse: true,
             icons: IconSet::Nerd,
             tab_width: 4,

@@ -1,22 +1,11 @@
-# mcr — merge conflict resolver
+# mcr — Merge Conflict Resolver
 
 A keyboard-first, three-pane Git merge TUI written in Rust. The incoming
 branch is on the left, your branch on the right, and the merged result in the
 middle. Resolve conflicts hunk by hunk or line by line, mix lines from both
 sides, and undo anything.
 
-```
- mcr  merge feature/discounts → main   file 1/2            ? 1 of 5 hunks unresolved   ● unsaved   dark
-╭ SOURCE  feature/discounts (theirs) ─╮╭ RESULT  inventory.py ──────────────╮╭ TARGET  main (ours) ───────────────╮
-│    14 def total_value(items):       ││    14 def total_value(items):      ││    13 def total_value(items):       │
-│▎✓  15     total = 0.0               ││▎◀  15     total = 0.0              ││▎✗  14     return sum(item.quantity …│
-│▎?  16     for item in items:        ││▎◀  16         total += item.quanti…││▎                                    │
-│▎✓  17         total += item.quantit…││▎      ? unresolved · 2 lines pend… ││▎                                    │
-│▎?  18     return round(total, 2)    ││▎                                   ││▎                                    │
-│    19                               ││    17                              ││    15                               │
-╰─────────────────────────────────────╯╰────────────────────────────────────╯╰─────────────────────────────────────╯
- space accept line   x reject line   enter take hunk   b both   n next conflict   u undo   w save   ? help   q quit
-```
+![mcr resolving a merge: source branch, merged result and target branch side by side](docs/screenshot.png)
 
 ## Install
 
@@ -58,8 +47,9 @@ As a `git mergetool`:
 
 The default theme is **Tokyo Night**; `tokyonight-storm`, `tokyonight-day`
 (light) and the Material `dark` / `light` themes are built in, and `ctrl-t`
-cycles through them. Only the current line is set apart, with its own
-background, across all three panes.
+cycles through them. The panes have no borders: each has a header strip,
+underlined in its color while it has the focus. Only the current line is set
+apart, with its own background, across all three panes.
 
 Icons come from a [Nerd Font](https://www.nerdfonts.com) (any patched font,
 e.g. JetBrainsMono Nerd Font). The typeface itself is your terminal's — a
@@ -67,7 +57,7 @@ terminal program cannot choose it. Without a Nerd Font set
 `ui.icons = "unicode"` (plain symbols, shown in the tables below) or
 `"ascii"`.
 
-## Reading the screen
+## Reading the Screen
 
 All three panes share one cursor row and scroll together; shorter sides are
 padded so a hunk always lines up across the panes.
@@ -84,8 +74,12 @@ padded so a hunk always lines up across the panes.
 Backgrounds are soft tints: orange for conflicts, green / teal / red for
 lines added / changed / removed relative to the common ancestor, cyan and
 purple in the result for lines that came from the source and target branch.
-The column at the far right is a map of the whole file (orange: unresolved,
-green: resolved, grey: merged automatically).
+Above the panes, the title bar shows the merge and a progress bar of the
+hunks resolved in this file; the tab row lists every conflicted file with
+the number of hunks still open (`✓` once it has none). The status bar names
+the focused pane and the state of the hunk under the cursor. Setting
+`ui.minimap = true` adds a column at the far right that maps the whole file
+(orange: unresolved, green: resolved, grey: merged automatically).
 
 ## Keys
 
@@ -121,7 +115,7 @@ list inside the app.
 
 The mouse works too: click to place the cursor, wheel to scroll.
 
-### Combining lines from both sides
+### Combining Lines From Both Sides
 
 Accepted lines appear in the result in the order you accept them, except
 that lines of the same side always keep their file order. So `space` on a
@@ -130,7 +124,7 @@ source / target / source. A hunk counts as resolved once every one of its
 lines is accepted or rejected — `c` (or `enter` in the result pane) rejects
 whatever is still pending.
 
-## What mcr guarantees
+## What mcr Guarantees
 
 * **Nothing is discarded silently.** A hunk with undecided lines is written
   as a standard conflict block (`<<<<<<<` / `|||||||` / `=======` /
