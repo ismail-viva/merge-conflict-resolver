@@ -1,7 +1,6 @@
 //! Drawing. Everything here is a pure function of [`App`] state; the only
 //! thing written back is the frame's geometry (for paging and the mouse).
 
-pub mod info;
 pub mod panes;
 
 use ratatui::buffer::Buffer;
@@ -64,10 +63,6 @@ pub struct Symbols {
     pub branch: &'static str,
     pub merge: &'static str,
     pub file: &'static str,
-    pub commit: &'static str,
-    pub author: &'static str,
-    pub clock: &'static str,
-    pub history: &'static str,
     pub keys: &'static str,
     pub info: &'static str,
     pub success: &'static str,
@@ -97,10 +92,6 @@ impl Symbols {
         branch: "\u{e0a0}",
         merge: "\u{f419}",
         file: "\u{f15c}",
-        commit: "\u{f417}",
-        author: "\u{f007}",
-        clock: "\u{f017}",
-        history: "\u{f1da}",
         keys: "\u{f11c}",
         info: "\u{f05a}",
         success: "\u{f058}",
@@ -128,10 +119,6 @@ impl Symbols {
         branch: "",
         merge: "",
         file: "",
-        commit: "",
-        author: "",
-        clock: "",
-        history: "",
         keys: "",
         info: "",
         success: "✓",
@@ -207,15 +194,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let symbols = Symbols::for_config(app.config.ui.icons);
     frame.buffer_mut().set_style(area, palette.base());
 
-    let info_height = if app.show_info {
-        app.config.ui.info_height.max(3)
-    } else {
-        0
-    };
-    let [title, body, info, status] = Layout::vertical([
+    let [title, body, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(3),
-        Constraint::Length(info_height),
         Constraint::Length(1),
     ])
     .areas(area);
@@ -248,7 +229,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 view,
                 pane,
                 focused: app.focus == pane,
-                hover: app.hover.filter(|(p, _)| *p == pane).map(|(_, row)| row),
                 palette: &palette,
                 symbols,
                 line_numbers: app.config.ui.line_numbers,
@@ -262,9 +242,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     draw_title(frame, title, app, &palette, symbols);
-    if app.show_info {
-        info::draw(frame, info, app, &palette, symbols);
-    }
     draw_status(frame, status, app, &palette, symbols);
 
     match app.mode {
@@ -482,6 +459,51 @@ fn draw_title(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &S
     frame.render_widget(Paragraph::new(right).style(bar), right_area);
 }
 
+/// "Hunk 2/5 · conflict · 3 lines pending" for the hunk under the cursor.
+fn hunk_summary(view: &FileView) -> (String, HunkStatus) {
+    let (hunk, _) = view.position();
+    let session = &view.session;
+    if session.hunks().is_empty() {
+        return ("Empty file".to_owned(), HunkStatus::Unchanged);
+    }
+    let status = session.status(hunk);
+    let kind = session.hunk(hunk).kind;
+    if kind == HunkKind::Unchanged && status == HunkStatus::Unchanged {
+        return ("Unchanged in both branches".to_owned(), status);
+    }
+    let changes = session
+        .hunks()
+        .iter()
+        .filter(|h| h.kind != HunkKind::Unchanged)
+        .count();
+    let ordinal = session.hunks()[..=hunk]
+        .iter()
+        .filter(|h| h.kind != HunkKind::Unchanged)
+        .count();
+    let kind_text = match kind {
+        HunkKind::Unchanged => "unchanged",
+        HunkKind::SourceOnly => "changed in source only",
+        HunkKind::TargetOnly => "changed in target only",
+        HunkKind::BothSame => "same change in both",
+        HunkKind::Conflict => "conflict",
+    };
+    let pending = session.pending(hunk);
+    let status_text = match status {
+        HunkStatus::Unchanged => "unchanged".to_owned(),
+        HunkStatus::Auto => "merged automatically".to_owned(),
+        HunkStatus::Unresolved => format!("{pending} lines pending"),
+        HunkStatus::Partial => format!("partial, {pending} lines pending"),
+        HunkStatus::Resolved => "resolved".to_owned(),
+        HunkStatus::Modified => "edited by hand".to_owned(),
+    };
+    let position = if kind == HunkKind::Unchanged {
+        String::new()
+    } else {
+        format!("Hunk {ordinal}/{changes} · ")
+    };
+    (format!("{position}{kind_text} · {status_text}"), status)
+}
+
 /// Bottom line: the focused pane, then the latest feedback or key hints.
 fn draw_status(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &Symbols) {
     let theme = p.theme;
@@ -498,10 +520,16 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &
     }
     if let Some(view) = app.view() {
         let total = view.rows.total().max(1);
-        let percent = (view.cursor + 1) * 100 / total;
+        let (summary, status) = hunk_summary(view);
+        let color = match status {
+            HunkStatus::Unresolved | HunkStatus::Partial => theme.unresolved,
+            HunkStatus::Resolved => theme.accepted,
+            HunkStatus::Modified => theme.modified,
+            HunkStatus::Auto | HunkStatus::Unchanged => theme.muted,
+        };
         right.push(Span::styled(
-            format!("{percent:>3}%  "),
-            p.style(theme.muted, theme.surface),
+            format!("{summary}  "),
+            p.style(color, theme.surface),
         ));
         right.extend(pill(
             format!(" {}:{} ", view.cursor + 1, total),

@@ -48,9 +48,6 @@ pub struct UiConfig {
     pub panel_ratio: [u16; 3],
     /// Share of the height given to the result pane in the stacked layout.
     pub stacked_result_percent: u16,
-    pub show_info: bool,
-    /// Height of the git history panel, borders included.
-    pub info_height: u16,
     pub line_numbers: bool,
     pub minimap: bool,
     pub mouse: bool,
@@ -71,8 +68,6 @@ impl Default for UiConfig {
             layout: LayoutMode::Columns,
             panel_ratio: [1, 1, 1],
             stacked_result_percent: 45,
-            show_info: true,
-            info_height: 7,
             line_numbers: true,
             minimap: true,
             mouse: true,
@@ -248,9 +243,6 @@ layout = "columns"
 panel_ratio = [{r0}, {r1}, {r2}]
 # Height share of the result pane in the stacked layout.
 stacked_result_percent = {stacked}
-# Git history panel (author, date, commit) for the line under the cursor.
-show_info = {show_info}
-info_height = {info_height}
 line_numbers = {line_numbers}
 # Overview column marking where changes and open conflicts are.
 minimap = {minimap}
@@ -278,8 +270,6 @@ backup = {backup}
         r1 = ui.panel_ratio[1],
         r2 = ui.panel_ratio[2],
         stacked = ui.stacked_result_percent,
-        show_info = ui.show_info,
-        info_height = ui.info_height,
         line_numbers = ui.line_numbers,
         minimap = ui.minimap,
         mouse = ui.mouse,

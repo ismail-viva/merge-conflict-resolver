@@ -83,7 +83,6 @@ actions! {
     "View" {
         ToggleTheme => "toggle_theme", "Switch to the next theme";
         ToggleLayout => "toggle_layout", "Switch between column and stacked layout";
-        ToggleInfo => "toggle_info", "Show or hide the git history panel";
         GrowCenter => "grow_center", "Widen the result pane";
         ShrinkCenter => "shrink_center", "Narrow the result pane";
         ResetLayout => "reset_layout", "Restore the configured pane sizes";

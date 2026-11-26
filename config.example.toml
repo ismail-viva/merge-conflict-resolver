@@ -14,9 +14,6 @@ layout = "columns"
 panel_ratio = [1, 1, 1]
 # Height share of the result pane in the stacked layout.
 stacked_result_percent = 45
-# Git history panel (author, date, commit) for the line under the cursor.
-show_info = true
-info_height = 7
 line_numbers = true
 # Overview column marking where changes and open conflicts are.
 minimap = true
@@ -88,7 +85,6 @@ file_picker            = ["f"]  # Choose a conflicted file
 # View
 toggle_theme           = ["ctrl-t"]  # Switch to the next theme
 toggle_layout          = ["v"]  # Switch between column and stacked layout
-toggle_info            = ["i"]  # Show or hide the git history panel
 grow_center            = ["+"]  # Widen the result pane
 shrink_center          = ["-"]  # Narrow the result pane
 reset_layout           = ["="]  # Restore the configured pane sizes

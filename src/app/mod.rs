@@ -7,9 +7,6 @@
 
 pub mod view;
 
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
-
 use ratatui::crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -18,10 +15,10 @@ use ratatui::layout::{Position, Rect};
 use crate::action::Action;
 use crate::config::{ColorDepth, Config, Key, LayoutMode, Lookup, Theme};
 use crate::core::text::split_lines;
-use crate::core::{LineRef, LineState, MergeSession, Op, OpError, Origin, Side};
-use crate::git::{Blame, CommitInfo, ConflictEntry, GitResult, MergeContext, SharedBackend};
+use crate::core::{LineRef, MergeSession, Op, OpError, Origin, Side};
+use crate::git::{ConflictEntry, MergeContext, SharedBackend};
 
-pub use view::{BlameState, FileView, Pane, RowLayout, SaveInfo};
+pub use view::{FileView, Pane, RowLayout, SaveInfo};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
@@ -77,28 +74,6 @@ pub struct FileSlot {
     pub view: Option<FileView>,
 }
 
-/// Git history of the line being inspected.
-#[derive(Debug, Clone)]
-pub enum LineHistory {
-    Commit(Arc<CommitInfo>),
-    Loading,
-    Note(String),
-}
-
-#[derive(Debug, Clone)]
-pub struct LineInfo {
-    /// Which branch the line belongs to, with its 1-based line number.
-    pub line: Option<(Side, usize)>,
-    pub state: Option<LineState>,
-    pub history: LineHistory,
-}
-
-struct BlameMessage {
-    file: usize,
-    side: Side,
-    result: GitResult<Option<Blame>>,
-}
-
 const RATIO_SCALE: u16 = 10;
 const RATIO_STEP: u16 = 2;
 
@@ -113,17 +88,12 @@ pub struct App {
     pub message: Option<Message>,
     /// Keys typed so far of a multi-key binding.
     pub pending: Vec<Key>,
-    /// Pane and row under the mouse pointer.
-    pub hover: Option<(Pane, usize)>,
     pub geometry: Geometry,
     pub theme_index: usize,
     pub depth: ColorDepth,
     pub layout: LayoutMode,
     /// Relative pane widths (source, result, target).
     pub ratio: [u16; 3],
-    pub show_info: bool,
-    blame_tx: Sender<BlameMessage>,
-    blame_rx: Receiver<BlameMessage>,
 }
 
 impl App {
@@ -133,7 +103,6 @@ impl App {
             .iter()
             .position(|e| e.unsupported.is_none())
             .ok_or_else(|| anyhow::anyhow!("no conflict that can be resolved line by line"))?;
-        let (blame_tx, blame_rx) = channel();
         let mut app = App {
             context: backend.context(),
             backend,
@@ -146,7 +115,6 @@ impl App {
             mode: Mode::Normal,
             message: None,
             pending: Vec::new(),
-            hover: None,
             geometry: Geometry {
                 panes: [Rect::default(); 3],
                 height: 20,
@@ -155,10 +123,7 @@ impl App {
             depth: ColorDepth::resolve(config.ui.color),
             layout: config.ui.layout,
             ratio: config.ui.panel_ratio.map(|r| r * RATIO_SCALE),
-            show_info: config.ui.show_info,
             config,
-            blame_tx,
-            blame_rx,
         };
         app.open_file(first);
         Ok(app)
@@ -243,7 +208,6 @@ impl App {
             match self.backend.load(&path) {
                 Ok(input) => {
                     self.files[index].view = Some(FileView::new(MergeSession::new(input)));
-                    self.request_blame(index);
                 }
                 Err(err) => {
                     self.notify(Level::Error, format!("{path}: {err}"));
@@ -252,7 +216,6 @@ impl App {
             }
         }
         self.current = index;
-        self.hover = None;
     }
 
     fn step_file(&mut self, forward: bool) {
@@ -273,108 +236,6 @@ impl App {
         self.notify(Level::Info, "No other conflicted file");
     }
 
-    fn request_blame(&self, file: usize) {
-        for side in [Side::Source, Side::Target] {
-            let backend = Arc::clone(&self.backend);
-            let tx = self.blame_tx.clone();
-            let path = self.files[file].entry.path.clone();
-            std::thread::spawn(move || {
-                let result = backend.blame(&path, side);
-                let _ = tx.send(BlameMessage { file, side, result });
-            });
-        }
-    }
-
-    /// Collect finished background work. Returns whether anything changed.
-    pub fn tick(&mut self) -> bool {
-        let mut changed = false;
-        while let Ok(message) = self.blame_rx.try_recv() {
-            let Some(view) = self
-                .files
-                .get_mut(message.file)
-                .and_then(|f| f.view.as_mut())
-            else {
-                continue;
-            };
-            let expected = view.session.side_len(message.side);
-            view.blame[side_index(message.side)] = match message.result {
-                Ok(Some(blame)) if blame.len() == expected => BlameState::Ready(blame),
-                Ok(Some(_)) => {
-                    BlameState::Unavailable("history does not match this version".to_owned())
-                }
-                Ok(None) => BlameState::Unavailable("no git history for this side".to_owned()),
-                Err(err) => BlameState::Unavailable(format!("no git history: {err}")),
-            };
-            changed = true;
-        }
-        changed
-    }
-
-    // ---- inspection ------------------------------------------------------
-
-    /// Git history of the hovered line, or else of the line under the cursor.
-    pub fn line_info(&self) -> Option<LineInfo> {
-        let view = self.view()?;
-        let (pane, row) = self.hover.unwrap_or((self.focus, view.cursor));
-        let (hunk, offset) = view.rows.locate(row)?;
-        let session = &view.session;
-        let range = |side: Side| match side {
-            Side::Source => session.hunk(hunk).source.clone(),
-            Side::Target => session.hunk(hunk).target.clone(),
-        };
-        let note = |text: &str| LineInfo {
-            line: None,
-            state: None,
-            history: LineHistory::Note(text.to_owned()),
-        };
-
-        let (side, index, state) = match pane.side() {
-            Some(side) => {
-                if offset >= range(side).len() {
-                    return Some(note("No line on this side here"));
-                }
-                let state = session.line_state(
-                    hunk,
-                    LineRef {
-                        side,
-                        index: offset,
-                    },
-                );
-                (side, range(side).start + offset, state)
-            }
-            None => match session.result_line(hunk, offset).map(|line| line.origin) {
-                Some(Origin::Unchanged) => (Side::Target, range(Side::Target).start + offset, None),
-                Some(Origin::Line(line)) => (
-                    line.side,
-                    range(line.side).start + line.index,
-                    Some(LineState::Accepted),
-                ),
-                Some(Origin::Custom) => {
-                    return Some(note("Edited by hand in this session — not committed yet"))
-                }
-                None if session.status(hunk).is_open() => {
-                    return Some(note(
-                        "Unresolved — pick lines from the source or target pane",
-                    ))
-                }
-                None => return Some(note("No line in the result here")),
-            },
-        };
-        let history = match &view.blame[side_index(side)] {
-            BlameState::Ready(blame) => match blame.line(index) {
-                Some(commit) => LineHistory::Commit(Arc::clone(commit)),
-                None => LineHistory::Note("no git history for this line".to_owned()),
-            },
-            BlameState::Loading => LineHistory::Loading,
-            BlameState::Unavailable(reason) => LineHistory::Note(reason.clone()),
-        };
-        Some(LineInfo {
-            line: Some((side, index + 1)),
-            state,
-            history,
-        })
-    }
-
     // ---- input -----------------------------------------------------------
 
     pub fn on_event(&mut self, event: Event) -> Effect {
@@ -389,7 +250,6 @@ impl App {
     }
 
     fn on_key(&mut self, event: KeyEvent) -> Effect {
-        self.hover = None;
         self.message = None;
         let key = Key::from_event(event);
         match self.mode {
@@ -519,10 +379,8 @@ impl App {
                 if let Some(pane) = hit {
                     self.focus = pane;
                 }
-                self.hover = None;
                 self.message = None;
             }
-            MouseEventKind::Moved => self.hover = pointed,
             _ => {}
         }
     }
@@ -615,13 +473,11 @@ impl App {
                     format!("Layout: {:?}", self.layout).to_lowercase(),
                 );
             }
-            Action::ToggleInfo => self.show_info = !self.show_info,
             Action::GrowCenter => self.ratio[1] = (self.ratio[1] + RATIO_STEP).min(80),
             Action::ShrinkCenter => self.ratio[1] = self.ratio[1].saturating_sub(RATIO_STEP).max(4),
             Action::ResetLayout => {
                 self.ratio = self.config.ui.panel_ratio.map(|r| r * RATIO_SCALE);
                 self.layout = self.config.ui.layout;
-                self.show_info = self.config.ui.show_info;
             }
             Action::Help => self.mode = Mode::Help { scroll: 0 },
             Action::Cancel => self.pending.clear(),
@@ -939,13 +795,6 @@ impl App {
             return true;
         }
         dirty.into_iter().all(|index| self.save(index))
-    }
-}
-
-fn side_index(side: Side) -> usize {
-    match side {
-        Side::Source => 0,
-        Side::Target => 1,
     }
 }
 

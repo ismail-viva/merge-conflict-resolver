@@ -3,10 +3,9 @@
 mod common;
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use common::TestRepo;
-use mcr::app::{App, Effect, Level, LineHistory, Mode, Pane};
+use mcr::app::{App, Effect, Level, Mode, Pane};
 use mcr::config::keymap::parse_sequence;
 use mcr::config::{ColorDepth, Config, Rgb, Theme};
 use mcr::core::{HunkStatus, LineState, Side};
@@ -340,7 +339,7 @@ fn the_screen_shows_all_three_panes_and_the_resolution_state() {
         "? unresolved · 3 lines pending",
         "1 of 3 hunks unresolved",
         "file 1/2",
-        "Hunk 2/3 · conflict · unresolved",
+        "Hunk 2/3 · conflict · 3 lines pending",
     ] {
         assert!(text.contains(needle), "missing `{needle}` in:\n{text}");
     }
@@ -397,49 +396,10 @@ fn conflict_rows_get_a_translucent_tint_and_themes_switch_at_runtime() {
 }
 
 #[test]
-fn git_history_of_the_selected_line_is_shown() {
+fn mouse_click_selects_a_line_and_wheel_scrolls() {
     let repo = TestRepo::conflicted();
     let mut app = app(&repo);
-    press(&mut app, "h");
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        app.tick();
-        match app.line_info().map(|info| info.history) {
-            Some(LineHistory::Commit(commit)) => {
-                assert_eq!(commit.author, "Grace Feature");
-                assert_eq!(commit.summary, "feature work");
-                break;
-            }
-            Some(LineHistory::Loading) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            other => panic!("unexpected history: {other:?}"),
-        }
-    }
-    let text = screen(&mut app);
-    for needle in [
-        "Grace Feature",
-        "<grace.feature@example.org>",
-        "feature work",
-        "source line 2 · ? unresolved",
-        "A body line explaining the feature.",
-    ] {
-        assert!(text.contains(needle), "missing `{needle}` in:\n{text}");
-    }
-    // The target pane shows the other branch's history for the same row.
-    press(&mut app, "l l");
-    assert!(screen(&mut app).contains("Linus Main"));
-    // Result lines report the history of the line they were taken from.
-    press(&mut app, "s h");
-    assert_eq!(app.focus, Pane::Result);
-    assert!(screen(&mut app).contains("Grace Feature"));
-}
-
-#[test]
-fn mouse_hover_inspects_and_click_selects() {
-    let repo = TestRepo::conflicted();
-    let mut app = app(&repo);
-    render(&mut app, 140, 40);
+    render(&mut app, 140, 12);
     let area = app.geometry.panes[Pane::Target.index()];
     let mouse = |kind, row| {
         Event::Mouse(MouseEvent {
@@ -449,16 +409,12 @@ fn mouse_hover_inspects_and_click_selects() {
             modifiers: KeyModifiers::NONE,
         })
     };
-
-    app.on_event(mouse(MouseEventKind::Moved, area.y));
-    assert_eq!(app.hover, Some((Pane::Target, 0)));
-    let info = app.line_info().unwrap();
-    assert_eq!(info.line, Some((Side::Target, 1)));
-
     app.on_event(mouse(MouseEventKind::Down(MouseButton::Left), area.y + 2));
     assert_eq!(app.focus, Pane::Target);
     assert_eq!(app.view().unwrap().cursor, 2);
-    assert_eq!(app.hover, None);
+
+    app.on_event(mouse(MouseEventKind::ScrollDown, area.y));
+    assert!(app.view().unwrap().scroll > 0);
 }
 
 #[test]

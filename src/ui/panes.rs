@@ -223,8 +223,6 @@ pub struct PaneWidget<'a> {
     pub view: &'a FileView,
     pub pane: Pane,
     pub focused: bool,
-    /// Row under the mouse pointer in this pane.
-    pub hover: Option<usize>,
     pub palette: &'a Palette<'a>,
     pub symbols: &'a Symbols,
     pub line_numbers: bool,
@@ -273,8 +271,6 @@ impl Widget for PaneWidget<'_> {
                     (false, false) => theme.bg.blend(theme.cursor, 0.6),
                     (true, focused) => cell.bg.blend(theme.fg, if focused { 0.14 } else { 0.07 }),
                 };
-            } else if self.hover == Some(row) {
-                bg = cell.bg.blend(theme.cursor, 0.5);
             }
             buf.set_style(line_area, p.style(cell.fg, bg));
 

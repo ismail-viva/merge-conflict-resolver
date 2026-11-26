@@ -227,7 +227,6 @@ const DEFAULTS: &[(Action, &[&str])] = &[
     (Action::FilePicker, &["f"]),
     (Action::ToggleTheme, &["ctrl-t"]),
     (Action::ToggleLayout, &["v"]),
-    (Action::ToggleInfo, &["i"]),
     (Action::GrowCenter, &["+"]),
     (Action::ShrinkCenter, &["-"]),
     (Action::ResetLayout, &["="]),

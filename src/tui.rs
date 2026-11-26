@@ -13,7 +13,7 @@ use ratatui::DefaultTerminal;
 use crate::app::{App, EditRequest, Effect};
 use crate::ui;
 
-/// How long to wait for input before checking on background work.
+/// How long one wait for input lasts.
 const TICK: Duration = Duration::from_millis(120);
 
 /// The terminal in TUI mode (raw, alternate screen, optional mouse).
@@ -82,7 +82,6 @@ pub fn run(app: &mut App) -> Result<()> {
                 }
             }
         }
-        redraw |= app.tick();
         match effect {
             Effect::None => {}
             Effect::Quit => return Ok(()),

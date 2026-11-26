@@ -3,7 +3,7 @@
 A keyboard-first, three-pane Git merge TUI written in Rust. The incoming
 branch is on the left, your branch on the right, and the merged result in the
 middle. Resolve conflicts hunk by hunk or line by line, mix lines from both
-sides, undo anything, and see who last touched every line.
+sides, and undo anything.
 
 ```
  mcr  merge feature/discounts → main   file 1/2            ? 1 of 5 hunks unresolved   ● unsaved   dark
@@ -15,11 +15,6 @@ sides, undo anything, and see who last touched every line.
 │▎?  18     return round(total, 2)    ││▎                                   ││▎                                    │
 │    19                               ││    17                              ││    15                               │
 ╰─────────────────────────────────────╯╰────────────────────────────────────╯╰─────────────────────────────────────╯
-╭ HISTORY ───────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Hunk 2/5 · conflict · partially resolved, 2 lines pending   │   source line 15 · ✓ accepted                    │
-│ b646ec12  Grace Hopper <grace@example.org>   2026-11-20 14:03 +0600 (6 days ago)                               │
-│ Support per-item discounts                                                                                     │
-╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
  space accept line   x reject line   enter take hunk   b both   n next conflict   u undo   w save   ? help   q quit
 ```
 
@@ -92,11 +87,6 @@ purple in the result for lines that came from the source and target branch.
 The column at the far right is a map of the whole file (orange: unresolved,
 green: resolved, grey: merged automatically).
 
-The **HISTORY** panel shows the resolution status of the hunk and, for the
-line under the cursor (or under the mouse pointer), the commit that last
-changed it: hash, author, date and message. For a result line it shows the
-history of the line it was taken from.
-
 ## Keys
 
 Defaults; every one of them can be changed (see below). `?` shows the live
@@ -125,12 +115,11 @@ list inside the app.
 | `w` / `ctrl-s`, `W` | save the file, save all files |
 | `] f` `[ f`, `f` | next / previous file, file picker |
 | `ctrl-t` | switch theme |
-| `v`, `i` | columns ↔ stacked layout, toggle the history panel |
+| `v` | columns ↔ stacked layout |
 | `+` `-` `=` | widen / narrow the result pane, reset the layout |
 | `?`, `q` | help, quit |
 
-The mouse works too: click to place the cursor, wheel to scroll, hover to
-inspect a line's history.
+The mouse works too: click to place the cursor, wheel to scroll.
 
 ### Combining lines from both sides
 
@@ -171,7 +160,6 @@ theme = "midnight"          # "auto", a built-in theme, or one defined below
 icons = "nerd"              # or "unicode", "ascii"
 layout = "stacked"          # or "columns"
 panel_ratio = [2, 3, 2]     # source, result, target
-info_height = 8
 auto_advance = true         # jump to the next conflict after resolving one
 
 [git]
@@ -215,7 +203,7 @@ src/
     history.rs   undo / redo (mementos of hunk state)
   git/       where inputs come from and results go: the MergeBackend trait,
              implemented for a repository (via the git CLI) and for plain files;
-             blame parsing
+             blame parsing (not shown in the interface at present)
   config/    config file, keymap (multi-key sequences), themes
   action.rs  the commands a key can trigger
   app/       application state: events in, state changes and effects out
@@ -245,4 +233,3 @@ with key events against an in-memory terminal.
 * Free-form editing happens in `$EDITOR`, one hunk at a time.
 * `theme = "auto"` relies on `$COLORFGBG`; without it, dark is assumed.
 * The default icons need a Nerd Font; see `ui.icons`.
-* Inspecting on hover needs a terminal that reports mouse motion.

@@ -6,7 +6,6 @@
 //! navigation and scrolling synchronized.
 
 use crate::core::{HunkKind, MergeSession, Side};
-use crate::git::Blame;
 
 /// One of the three panes, left to right.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -109,15 +108,6 @@ impl RowLayout {
     }
 }
 
-/// State of an asynchronous blame request.
-#[derive(Debug, Clone, Default)]
-pub enum BlameState {
-    #[default]
-    Loading,
-    Ready(Blame),
-    Unavailable(String),
-}
-
 /// What happened the last time the file was written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SaveInfo {
@@ -137,8 +127,6 @@ pub struct FileView {
     /// Session revision that is on disk (0 = nothing written yet).
     pub saved_revision: u64,
     pub last_save: Option<SaveInfo>,
-    /// Blame of the source and target side.
-    pub blame: [BlameState; 2],
 }
 
 impl FileView {
@@ -152,7 +140,6 @@ impl FileView {
             hscroll: 0,
             saved_revision: 0,
             last_save: None,
-            blame: [BlameState::Loading, BlameState::Loading],
         };
         // Start on the first thing that needs attention.
         if let Some(hunk) = view.find_hunk(0, true, |v, h| v.session.status(h).is_open()) {
