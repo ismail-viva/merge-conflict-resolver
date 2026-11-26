@@ -36,7 +36,7 @@ mcr                         # resolve the conflicts of the merge / rebase / cher
 mcr merge feature/x         # run `git merge feature/x`, then resolve what conflicts
 mcr file LOCAL REMOTE --base BASE -o MERGED     # merge three plain files
 mcr print-config            # print a commented config file with every default
-mcr -C path/to/repo --theme light --config ./mcr.toml
+mcr -C path/to/repo --theme tokyonight-storm --config ./mcr.toml
 ```
 
 As a `git mergetool`:
@@ -59,6 +59,19 @@ As a `git mergetool`:
 3. `w` writes the file. Once nothing is unresolved it is also `git add`ed.
 4. `] f` moves to the next file; `q` quits. Finish with `git commit`.
 
+## Look
+
+The default theme is **Tokyo Night**; `tokyonight-storm`, `tokyonight-day`
+(light) and the Material `dark` / `light` themes are built in, and `ctrl-t`
+cycles through them. Only the current line is set apart, with its own
+background, across all three panes.
+
+Icons come from a [Nerd Font](https://www.nerdfonts.com) (any patched font,
+e.g. JetBrainsMono Nerd Font). The typeface itself is your terminal's — a
+terminal program cannot choose it. Without a Nerd Font set
+`ui.icons = "unicode"` (plain symbols, shown in the tables below) or
+`"ascii"`.
+
 ## Reading the screen
 
 All three panes share one cursor row and scroll together; shorter sides are
@@ -73,8 +86,8 @@ padded so a hunk always lines up across the panes.
 | `◀` / `▶` | result line taken from the source / target branch |
 | `▎` | the hunk under the cursor |
 
-Backgrounds are soft tints: orange for conflicts, green / amber / red for
-lines added / changed / removed relative to the common ancestor, blue and
+Backgrounds are soft tints: orange for conflicts, green / teal / red for
+lines added / changed / removed relative to the common ancestor, cyan and
 purple in the result for lines that came from the source and target branch.
 The column at the far right is a map of the whole file (orange: unresolved,
 green: resolved, grey: merged automatically).
@@ -154,7 +167,8 @@ default; `mcr print-config` regenerates it.
 
 ```toml
 [ui]
-theme = "midnight"          # "auto", "dark", "light" or a theme defined below
+theme = "midnight"          # "auto", a built-in theme, or one defined below
+icons = "nerd"              # or "unicode", "ascii"
 layout = "stacked"          # or "columns"
 panel_ratio = [2, 3, 2]     # source, result, target
 info_height = 8
@@ -171,7 +185,7 @@ goto_top = "g g"            # multi-key sequences
 toggle_theme = []           # unbind
 
 [themes.midnight]
-base = "dark"               # start from "dark" or "light"
+base = "tokyonight"         # start from any built-in theme
 bg = "#0f111a"
 accent = "#84ffff"
 conflict = "#ff5370"
@@ -182,14 +196,14 @@ Keys are written as typed — `j`, `G`, `space`, `enter`, `ctrl-d`, `alt-x`,
 `shift-tab`, `f5` — or in Vim notation (`<c-d>`, `<space>`). Binding a key
 to an action takes it away from the default action that used it.
 
-Theme colors: `bg` `surface` `fg` `muted` `border` `accent` `source`
+Theme colors: `bg` `surface` `fg` `muted` `gutter` `cursor` `border` `accent` `source`
 `target` `added` `removed` `modified` `conflict` `accepted` `rejected`
 `unresolved`. Themes switch at runtime with `ctrl-t`.
 
 Terminals have no alpha channel, so the "translucent" backgrounds are the
 accent color blended into the background at `tint` opacity. Without 24-bit
 color (`$COLORTERM`), colors fall back to the nearest of the 256-color
-palette; `ui.ascii = true` replaces the Unicode markers and borders.
+palette; `ui.icons = "ascii"` keeps markers and borders to plain ASCII.
 
 ## Architecture
 
@@ -230,4 +244,5 @@ with key events against an in-memory terminal.
 * Line-based: no syntax highlighting and no word-level diff inside a line.
 * Free-form editing happens in `$EDITOR`, one hunk at a time.
 * `theme = "auto"` relies on `$COLORFGBG`; without it, dark is assumed.
+* The default icons need a Nerd Font; see `ui.icons`.
 * Inspecting on hover needs a terminal that reports mouse motion.

@@ -77,7 +77,7 @@ pub fn describe<'a>(
     let filler = |accent: Option<Rgb>| RowView {
         bg: match accent {
             Some(accent) => theme.bg.blend(accent, theme.tint * 0.5),
-            None => theme.bg.blend(theme.surface, 0.7),
+            None => theme.bg,
         },
         ..plain.clone()
     };
@@ -263,11 +263,18 @@ impl Widget for PaneWidget<'_> {
             };
             let cell = describe(view, theme, self.symbols, self.pane, hunk, offset);
 
+            // Only the current line is set apart: a distinct background on
+            // plain rows, a lift of the tint on diff rows.
+            let tinted = cell.bg != theme.bg;
             let mut bg = cell.bg;
             if row == view.cursor {
-                bg = bg.blend(theme.fg, if self.focused { 0.16 } else { 0.07 });
+                bg = match (tinted, self.focused) {
+                    (false, true) => theme.cursor,
+                    (false, false) => theme.bg.blend(theme.cursor, 0.6),
+                    (true, focused) => cell.bg.blend(theme.fg, if focused { 0.14 } else { 0.07 }),
+                };
             } else if self.hover == Some(row) {
-                bg = bg.blend(theme.fg, 0.05);
+                bg = cell.bg.blend(theme.cursor, 0.5);
             }
             buf.set_style(line_area, p.style(cell.fg, bg));
 
@@ -308,7 +315,13 @@ impl Widget for PaneWidget<'_> {
                 let style = if row == view.cursor && self.focused {
                     p.style(theme.accent, bg).add_modifier(Modifier::BOLD)
                 } else {
-                    p.style(theme.muted, bg)
+                    // The dim gutter color would vanish on a tinted row.
+                    let color = match (row == view.cursor, tinted) {
+                        (true, _) => theme.fg,
+                        (false, true) => theme.muted,
+                        (false, false) => theme.gutter,
+                    };
+                    p.style(color, bg)
                 };
                 put(buf, &mut x, &number, style);
             }

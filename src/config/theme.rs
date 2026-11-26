@@ -15,7 +15,7 @@ pub struct Rgb(pub u8, pub u8, pub u8);
 pub enum ThemeError {
     #[error("invalid color `{0}` (expected `#rrggbb`)")]
     InvalidColor(String),
-    #[error("theme `{theme}` is based on unknown theme `{base}` (use `dark` or `light`)")]
+    #[error("theme `{theme}` is based on unknown theme `{base}` (built-in: tokyonight, tokyonight-storm, tokyonight-day, dark, light)")]
     UnknownBase { theme: String, base: String },
     #[error("unknown theme `{0}`")]
     UnknownTheme(String),
@@ -133,7 +133,7 @@ macro_rules! theme {
         #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
         #[serde(default, deny_unknown_fields)]
         pub struct ThemeOverride {
-            /// Built-in theme to start from: `dark` (default) or `light`.
+            /// Built-in theme to start from (default: `tokyonight`).
             pub base: Option<String>,
             pub tint: Option<f32>,
             $( pub $field: Option<String>, )*
@@ -165,8 +165,12 @@ theme! {
     surface,
     /// Primary text.
     fg,
-    /// Line numbers, hints, rejected text.
+    /// Hints, secondary and rejected text.
     muted,
+    /// Line numbers.
+    gutter,
+    /// Background of the current line.
+    cursor,
     /// Unfocused pane borders.
     border,
     /// Focused border, cursor bar, highlights.
@@ -192,6 +196,78 @@ theme! {
 }
 
 impl Theme {
+    /// Names of the built-in themes, in switching order.
+    pub const BUILTIN: &'static [&'static str] = &[
+        "tokyonight",
+        "tokyonight-storm",
+        "tokyonight-day",
+        "dark",
+        "light",
+    ];
+
+    /// Tokyo Night (night): the default.
+    pub fn tokyonight() -> Theme {
+        Theme {
+            name: "tokyonight".into(),
+            tint: 0.18,
+            bg: Rgb(0x1a, 0x1b, 0x26),
+            surface: Rgb(0x16, 0x16, 0x1e),
+            fg: Rgb(0xc0, 0xca, 0xf5),
+            muted: Rgb(0x73, 0x7a, 0xa2),
+            gutter: Rgb(0x3b, 0x42, 0x61),
+            cursor: Rgb(0x29, 0x2e, 0x42),
+            border: Rgb(0x3b, 0x42, 0x61),
+            accent: Rgb(0x7a, 0xa2, 0xf7),
+            source: Rgb(0x7d, 0xcf, 0xff),
+            target: Rgb(0xbb, 0x9a, 0xf7),
+            added: Rgb(0x9e, 0xce, 0x6a),
+            removed: Rgb(0xf7, 0x76, 0x8e),
+            modified: Rgb(0x2a, 0xc3, 0xde),
+            conflict: Rgb(0xff, 0x9e, 0x64),
+            accepted: Rgb(0x9e, 0xce, 0x6a),
+            rejected: Rgb(0xf7, 0x76, 0x8e),
+            unresolved: Rgb(0xe0, 0xaf, 0x68),
+        }
+    }
+
+    /// Tokyo Night Storm: the same accents on a lighter slate background.
+    pub fn tokyonight_storm() -> Theme {
+        Theme {
+            name: "tokyonight-storm".into(),
+            bg: Rgb(0x24, 0x28, 0x3b),
+            surface: Rgb(0x1f, 0x23, 0x35),
+            cursor: Rgb(0x2f, 0x35, 0x4f),
+            gutter: Rgb(0x4a, 0x52, 0x74),
+            border: Rgb(0x4a, 0x52, 0x74),
+            ..Theme::tokyonight()
+        }
+    }
+
+    /// Tokyo Night Day: the light variant.
+    pub fn tokyonight_day() -> Theme {
+        Theme {
+            name: "tokyonight-day".into(),
+            tint: 0.16,
+            bg: Rgb(0xe1, 0xe2, 0xe7),
+            surface: Rgb(0xd0, 0xd5, 0xe3),
+            fg: Rgb(0x37, 0x60, 0xbf),
+            muted: Rgb(0x68, 0x72, 0xa1),
+            gutter: Rgb(0xa8, 0xae, 0xcb),
+            cursor: Rgb(0xc4, 0xc8, 0xda),
+            border: Rgb(0xa8, 0xae, 0xcb),
+            accent: Rgb(0x2e, 0x7d, 0xe9),
+            source: Rgb(0x00, 0x71, 0x97),
+            target: Rgb(0x98, 0x54, 0xf1),
+            added: Rgb(0x58, 0x75, 0x39),
+            removed: Rgb(0xf5, 0x2a, 0x65),
+            modified: Rgb(0x18, 0x8a, 0x92),
+            conflict: Rgb(0xb1, 0x5c, 0x00),
+            accepted: Rgb(0x58, 0x75, 0x39),
+            rejected: Rgb(0xf5, 0x2a, 0x65),
+            unresolved: Rgb(0x8c, 0x6c, 0x3e),
+        }
+    }
+
     /// Material dark: grey 900 surface with 300-weight accents.
     pub fn dark() -> Theme {
         Theme {
@@ -201,6 +277,8 @@ impl Theme {
             surface: Rgb(0x2a, 0x2a, 0x2a),
             fg: Rgb(0xe0, 0xe0, 0xe0),
             muted: Rgb(0x8a, 0x8a, 0x8a),
+            gutter: Rgb(0x5c, 0x5c, 0x5c),
+            cursor: Rgb(0x33, 0x33, 0x33),
             border: Rgb(0x42, 0x42, 0x42),
             accent: Rgb(0x82, 0xb1, 0xff),
             source: Rgb(0x64, 0xb5, 0xf6),
@@ -224,6 +302,8 @@ impl Theme {
             surface: Rgb(0xec, 0xef, 0xf1),
             fg: Rgb(0x21, 0x21, 0x21),
             muted: Rgb(0x75, 0x75, 0x75),
+            gutter: Rgb(0xa0, 0xa0, 0xa0),
+            cursor: Rgb(0xe3, 0xe8, 0xee),
             border: Rgb(0xbd, 0xbd, 0xbd),
             accent: Rgb(0x29, 0x62, 0xff),
             source: Rgb(0x19, 0x76, 0xd2),
@@ -240,6 +320,9 @@ impl Theme {
 
     fn builtin(name: &str) -> Option<Theme> {
         match name {
+            "tokyonight" => Some(Theme::tokyonight()),
+            "tokyonight-storm" => Some(Theme::tokyonight_storm()),
+            "tokyonight-day" => Some(Theme::tokyonight_day()),
             "dark" => Some(Theme::dark()),
             "light" => Some(Theme::light()),
             _ => None,
@@ -262,12 +345,18 @@ impl Theme {
 pub fn build_themes(
     overrides: &std::collections::BTreeMap<String, ThemeOverride>,
 ) -> Result<Vec<Theme>, ThemeError> {
-    let mut themes = vec![Theme::dark(), Theme::light()];
+    let mut themes: Vec<Theme> = Theme::BUILTIN
+        .iter()
+        .filter_map(|n| Theme::builtin(n))
+        .collect();
     for (name, over) in overrides {
-        let base_name = over.base.as_deref().unwrap_or(match name.as_str() {
-            "light" => "light",
-            _ => "dark",
-        });
+        // A table named after a built-in theme adjusts that theme.
+        let fallback = if Theme::BUILTIN.contains(&name.as_str()) {
+            name.as_str()
+        } else {
+            "tokyonight"
+        };
+        let base_name = over.base.as_deref().unwrap_or(fallback);
         let mut theme = Theme::builtin(base_name).ok_or_else(|| ThemeError::UnknownBase {
             theme: name.clone(),
             base: base_name.to_owned(),
@@ -314,13 +403,17 @@ mod tests {
 
     #[test]
     fn tints_stay_close_to_the_background() {
-        for theme in [Theme::dark(), Theme::light()] {
+        for name in Theme::BUILTIN {
+            let theme = Theme::builtin(name).unwrap();
+            assert_eq!(&theme.name, name);
             let tint = theme.tinted(theme.conflict);
             assert_ne!(tint, theme.bg);
             assert!(tint.distance(theme.bg) < tint.distance(theme.conflict));
         }
         assert!(Theme::dark().is_dark());
+        assert!(Theme::tokyonight().is_dark());
         assert!(!Theme::light().is_dark());
+        assert!(!Theme::tokyonight_day().is_dark());
     }
 
     #[test]
@@ -375,12 +468,24 @@ mod tests {
         let themes = build_themes(&overrides).unwrap();
         assert_eq!(
             themes.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
-            ["dark", "light", "ocean"]
+            [
+                "tokyonight",
+                "tokyonight-storm",
+                "tokyonight-day",
+                "dark",
+                "light",
+                "ocean"
+            ]
         );
-        assert_eq!(themes[0].bg, Rgb(0, 0, 0));
-        assert_eq!(themes[2].accent, Rgb(0, 0x60, 0x64));
-        assert_eq!(themes[2].fg, Theme::light().fg);
-        assert_eq!(themes[2].tint, 0.3);
+        assert_eq!(themes[3].bg, Rgb(0, 0, 0));
+        assert_eq!(
+            themes[3].fg,
+            Theme::dark().fg,
+            "a built-in's name adjusts that built-in"
+        );
+        assert_eq!(themes[5].accent, Rgb(0, 0x60, 0x64));
+        assert_eq!(themes[5].fg, Theme::light().fg);
+        assert_eq!(themes[5].tint, 0.3);
     }
 
     #[test]

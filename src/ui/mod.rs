@@ -8,13 +8,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 use ratatui::Frame;
 
 use crate::action::Action;
 use crate::app::{App, FileView, Geometry, Level, Mode, Pane};
 use crate::config::keymap::format_sequence;
-use crate::config::{ColorDepth, LayoutMode, Rgb, Theme};
+use crate::config::{ColorDepth, IconSet, LayoutMode, Rgb, Theme};
 use crate::core::{HunkKind, HunkStatus};
 
 /// A theme bound to the terminal's color depth.
@@ -41,7 +41,7 @@ impl Palette<'_> {
     }
 }
 
-/// Glyphs used for line states.
+/// Glyphs for line states and decorations, per [`IconSet`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Symbols {
     pub accepted: &'static str,
@@ -56,9 +56,59 @@ pub struct Symbols {
     pub arrow: &'static str,
     pub dot: &'static str,
     pub minimap: &'static str,
+    /// Rounded ends of "pill" labels; empty when the font has none.
+    pub cap_left: &'static str,
+    pub cap_right: &'static str,
+    // Decorative icons; empty when the icon set has none.
+    pub app: &'static str,
+    pub branch: &'static str,
+    pub merge: &'static str,
+    pub file: &'static str,
+    pub commit: &'static str,
+    pub author: &'static str,
+    pub clock: &'static str,
+    pub history: &'static str,
+    pub keys: &'static str,
+    pub info: &'static str,
+    pub success: &'static str,
+    pub warn: &'static str,
+    pub error: &'static str,
+    pub save: &'static str,
 }
 
 impl Symbols {
+    /// Nerd Font icons (Font Awesome, Octicons and Powerline ranges).
+    pub const NERD: Symbols = Symbols {
+        accepted: "\u{f00c}",
+        rejected: "\u{f00d}",
+        unresolved: "\u{f128}",
+        modified: "\u{f040}",
+        superseded: "·",
+        from_source: "\u{f0d9}",
+        from_target: "\u{f0da}",
+        bar: "▎",
+        no_eol: "\u{f05e} no newline at end of file",
+        arrow: "\u{f061}",
+        dot: "\u{f111}",
+        minimap: "▐",
+        cap_left: "\u{e0b6}",
+        cap_right: "\u{e0b4}",
+        app: "\u{e727}",
+        branch: "\u{e0a0}",
+        merge: "\u{f419}",
+        file: "\u{f15c}",
+        commit: "\u{f417}",
+        author: "\u{f007}",
+        clock: "\u{f017}",
+        history: "\u{f1da}",
+        keys: "\u{f11c}",
+        info: "\u{f05a}",
+        success: "\u{f058}",
+        warn: "\u{f071}",
+        error: "\u{f057}",
+        save: "\u{f0c7}",
+    };
+
     pub const UNICODE: Symbols = Symbols {
         accepted: "✓",
         rejected: "✗",
@@ -71,7 +121,23 @@ impl Symbols {
         no_eol: "⊘ no newline at end of file",
         arrow: "→",
         dot: "●",
-        minimap: "┃",
+        minimap: "▐",
+        cap_left: "",
+        cap_right: "",
+        app: "",
+        branch: "",
+        merge: "",
+        file: "",
+        commit: "",
+        author: "",
+        clock: "",
+        history: "",
+        keys: "",
+        info: "",
+        success: "✓",
+        warn: "!",
+        error: "✗",
+        save: "",
     };
 
     pub const ASCII: Symbols = Symbols {
@@ -87,15 +153,47 @@ impl Symbols {
         arrow: "->",
         dot: "*",
         minimap: "|",
+        success: "+",
+        error: "x",
+        ..Symbols::UNICODE
     };
 
-    pub fn for_config(ascii: bool) -> &'static Symbols {
-        if ascii {
-            &Symbols::ASCII
-        } else {
-            &Symbols::UNICODE
+    pub fn for_config(icons: IconSet) -> &'static Symbols {
+        match icons {
+            IconSet::Nerd => &Symbols::NERD,
+            IconSet::Unicode => &Symbols::UNICODE,
+            IconSet::Ascii => &Symbols::ASCII,
         }
     }
+}
+
+/// `icon` followed by a space, or nothing when the icon set has no glyph.
+pub(crate) fn icon(glyph: &str) -> String {
+    if glyph.is_empty() {
+        String::new()
+    } else {
+        format!("{glyph} ")
+    }
+}
+
+pub(crate) fn border_type(icons: IconSet) -> BorderType {
+    match icons {
+        IconSet::Ascii => BorderType::Plain,
+        _ => BorderType::Rounded,
+    }
+}
+
+/// A rounded label: `text` on a `color` background.
+fn pill<'a>(text: String, color: Rgb, on: Rgb, p: &Palette, symbols: &Symbols) -> Vec<Span<'a>> {
+    let cap = p.style(color, on);
+    vec![
+        Span::styled(symbols.cap_left, cap),
+        Span::styled(
+            text,
+            p.style(p.theme.bg, color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(symbols.cap_right, cap),
+    ]
 }
 
 /// Draw one frame.
@@ -106,7 +204,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         theme: &theme,
         depth: app.depth,
     };
-    let symbols = Symbols::for_config(app.config.ui.ascii);
+    let symbols = Symbols::for_config(app.config.ui.icons);
     frame.buffer_mut().set_style(area, palette.base());
 
     let info_height = if app.show_info {
@@ -130,7 +228,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Frame the panes first: their inner areas define this frame's geometry.
     let mut inner = [Rect::default(); 3];
     for pane in Pane::ALL {
-        let block = pane_block(app, pane, &palette);
+        let block = pane_block(app, pane, &palette, symbols);
         inner[pane.index()] = block.inner(outer[pane.index()]);
         frame.render_widget(block, outer[pane.index()]);
     }
@@ -167,13 +265,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.show_info {
         info::draw(frame, info, app, &palette, symbols);
     }
-    draw_status(frame, status, app, &palette);
+    draw_status(frame, status, app, &palette, symbols);
 
     match app.mode {
         Mode::Normal => {}
-        Mode::Help { scroll } => draw_help(frame, area, app, &palette, scroll),
+        Mode::Help { scroll } => draw_help(frame, area, app, &palette, symbols, scroll),
         Mode::Files { selected } => draw_files(frame, area, app, &palette, symbols, selected),
-        Mode::ConfirmQuit => draw_confirm(frame, area, app, &palette),
+        Mode::ConfirmQuit => draw_confirm(frame, area, app, &palette, symbols),
     }
 }
 
@@ -201,10 +299,9 @@ fn pane_areas(app: &App, body: Rect) -> [Rect; 3] {
     }
 }
 
-fn pane_block<'a>(app: &App, pane: Pane, p: &Palette) -> Block<'a> {
-    let theme = p.theme;
-    let focused = app.focus == pane;
-    let (name, detail, color) = match pane {
+/// Name, detail text and identity color of a pane.
+fn pane_identity(app: &App, pane: Pane, theme: &Theme) -> (&'static str, String, Rgb) {
+    match pane {
         Pane::Source => (
             "SOURCE",
             format!("{} (theirs)", app.context.source_label),
@@ -216,25 +313,37 @@ fn pane_block<'a>(app: &App, pane: Pane, p: &Palette) -> Block<'a> {
             format!("{} (ours)", app.context.target_label),
             theme.target,
         ),
-    };
-    let mut name_style = p.style(color, theme.bg).add_modifier(Modifier::BOLD);
-    if focused {
-        name_style = p.style(theme.bg, color).add_modifier(Modifier::BOLD);
     }
-    let title = Line::from(vec![
-        Span::styled(format!(" {name} "), name_style),
-        Span::styled(format!(" {detail} "), p.style(theme.fg, theme.bg)),
-    ]);
-    let border = if focused { theme.accent } else { theme.border };
+}
+
+fn pane_block<'a>(app: &App, pane: Pane, p: &Palette, symbols: &Symbols) -> Block<'a> {
+    let theme = p.theme;
+    let focused = app.focus == pane;
+    let (name, detail, color) = pane_identity(app, pane, theme);
+    let glyph = match pane {
+        Pane::Result => symbols.merge,
+        _ => symbols.branch,
+    };
+    let label = format!(" {}{name} ", icon(glyph));
+    let mut title = vec![Span::raw(" ")];
+    if focused {
+        title.extend(pill(label, color, theme.bg, p, symbols));
+    } else {
+        title.push(Span::styled(
+            label,
+            p.style(color, theme.bg).add_modifier(Modifier::BOLD),
+        ));
+    }
+    let detail_color = if focused { theme.fg } else { theme.muted };
+    title.push(Span::styled(
+        format!(" {detail} "),
+        p.style(detail_color, theme.bg),
+    ));
     Block::bordered()
-        .border_type(if app.config.ui.ascii {
-            BorderType::Plain
-        } else {
-            BorderType::Rounded
-        })
-        .border_style(p.style(border, theme.bg))
+        .border_type(border_type(app.config.ui.icons))
+        .border_style(p.style(if focused { color } else { theme.border }, theme.bg))
         .style(p.base())
-        .title(title)
+        .title(Line::from(title))
 }
 
 /// Overview of the whole file: where the changes and open conflicts are.
@@ -277,7 +386,7 @@ fn draw_minimap(buf: &mut Buffer, area: Rect, view: &FileView, p: &Palette, symb
         cell_of(view.scroll)..=cell_of((view.scroll + track.height as usize).saturating_sub(1));
     for (cell, mark) in marks.iter().enumerate() {
         let bg = if viewport.contains(&cell) {
-            theme.bg.blend(theme.fg, 0.18)
+            theme.cursor
         } else {
             theme.bg
         };
@@ -293,58 +402,74 @@ fn draw_title(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &S
     let theme = p.theme;
     let bar = p.bar();
     let on_bar = |color: Rgb| p.style(color, theme.surface);
-    let mut left = vec![
+    let bold = Modifier::BOLD;
+
+    let mut left = pill(
+        format!(" {}mcr ", icon(symbols.app)),
+        theme.accent,
+        theme.surface,
+        p,
+        symbols,
+    );
+    left.extend([
+        Span::styled(format!("  {} ", app.context.operation), on_bar(theme.muted)),
         Span::styled(
-            " mcr ",
-            p.style(theme.bg, theme.accent).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!(" {} ", app.context.operation), on_bar(theme.muted)),
-        Span::styled(
-            app.context.source_label.clone(),
-            on_bar(theme.source).add_modifier(Modifier::BOLD),
+            format!("{}{}", icon(symbols.branch), app.context.source_label),
+            on_bar(theme.source).add_modifier(bold),
         ),
         Span::styled(format!(" {} ", symbols.arrow), on_bar(theme.muted)),
         Span::styled(
-            app.context.target_label.clone(),
-            on_bar(theme.target).add_modifier(Modifier::BOLD),
+            format!("{}{}", icon(symbols.branch), app.context.target_label),
+            on_bar(theme.target).add_modifier(bold),
         ),
-    ];
+        Span::styled(
+            format!("   {}{}", icon(symbols.file), app.current_path()),
+            on_bar(theme.fg),
+        ),
+    ]);
     if app.files.len() > 1 {
         left.push(Span::styled(
-            format!("   file {}/{}", app.current + 1, app.files.len()),
+            format!("  file {}/{}", app.current + 1, app.files.len()),
             on_bar(theme.muted),
         ));
     }
 
     let mut right = Vec::new();
     if let Some(view) = app.view() {
-        let stats = view.session.stats();
-        if stats.open == 0 {
-            right.push(Span::styled(
-                format!("{} all {} hunks resolved", symbols.accepted, stats.changes),
-                on_bar(theme.accepted).add_modifier(Modifier::BOLD),
-            ));
-        } else {
-            right.push(Span::styled(
-                format!(
-                    "{} {} of {} hunks unresolved",
-                    symbols.unresolved, stats.open, stats.changes
-                ),
-                on_bar(theme.unresolved).add_modifier(Modifier::BOLD),
-            ));
-        }
         let (text, color) = match (view.is_dirty(), view.last_save) {
-            (true, _) => (format!("{} unsaved", symbols.dot), theme.modified),
-            (false, Some(save)) if save.staged => ("saved · staged".to_owned(), theme.accepted),
-            (false, Some(_)) => ("saved".to_owned(), theme.muted),
+            (true, _) => (format!("{} unsaved", symbols.dot), theme.unresolved),
+            (false, Some(save)) if save.staged => (
+                format!("{}saved · staged", icon(symbols.save)),
+                theme.accepted,
+            ),
+            (false, Some(_)) => (format!("{}saved", icon(symbols.save)), theme.muted),
             (false, None) => (String::new(), theme.muted),
         };
         if !text.is_empty() {
-            right.push(Span::styled(format!("   {text}"), on_bar(color)));
+            right.push(Span::styled(format!("{text}  "), on_bar(color)));
         }
+        let stats = view.session.stats();
+        let (text, color) = if stats.open == 0 {
+            (
+                format!(
+                    " {} all {} hunks resolved ",
+                    symbols.accepted, stats.changes
+                ),
+                theme.accepted,
+            )
+        } else {
+            (
+                format!(
+                    " {} {} of {} hunks unresolved ",
+                    symbols.unresolved, stats.open, stats.changes
+                ),
+                theme.unresolved,
+            )
+        };
+        right.extend(pill(text, color, theme.surface, p, symbols));
     }
     right.push(Span::styled(
-        format!("   {} ", theme.name),
+        format!("  {} ", theme.name),
         on_bar(theme.muted),
     ));
 
@@ -357,60 +482,80 @@ fn draw_title(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &S
     frame.render_widget(Paragraph::new(right).style(bar), right_area);
 }
 
-/// Bottom line: the latest feedback message, or key hints.
-fn draw_status(frame: &mut Frame, area: Rect, app: &App, p: &Palette) {
+/// Bottom line: the focused pane, then the latest feedback or key hints.
+fn draw_status(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &Symbols) {
     let theme = p.theme;
     let bar = p.bar();
     frame.buffer_mut().set_style(area, bar);
 
-    let mut right = String::new();
+    let mut right = Vec::new();
     if !app.pending.is_empty() {
-        right.push_str(&format!("{} …  ", format_sequence(&app.pending)));
+        right.push(Span::styled(
+            format!("{} …  ", format_sequence(&app.pending)),
+            p.style(theme.accent, theme.surface)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
     if let Some(view) = app.view() {
-        right.push_str(&format!("row {}/{} ", view.cursor + 1, view.rows.total()));
+        let total = view.rows.total().max(1);
+        let percent = (view.cursor + 1) * 100 / total;
+        right.push(Span::styled(
+            format!("{percent:>3}%  "),
+            p.style(theme.muted, theme.surface),
+        ));
+        right.extend(pill(
+            format!(" {}:{} ", view.cursor + 1, total),
+            theme.accent,
+            theme.surface,
+            p,
+            symbols,
+        ));
     }
-    let right_width = (right.chars().count() as u16).min(area.width);
+    let right = Line::from(right);
+    let right_width = (right.width() as u16).min(area.width);
     let [left_area, right_area] =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(right_width)]).areas(area);
-    frame.render_widget(
-        Paragraph::new(right).style(p.style(theme.muted, theme.surface)),
-        right_area,
-    );
+    frame.render_widget(Paragraph::new(right).style(bar), right_area);
 
-    let line = match &app.message {
+    let (name, _, color) = pane_identity(app, app.focus, theme);
+    let mut left = pill(format!(" {name} "), color, theme.surface, p, symbols);
+    left.push(Span::styled(" ", bar));
+    match &app.message {
         Some(message) => {
-            let color = match message.level {
-                Level::Info => theme.fg,
-                Level::Success => theme.accepted,
-                Level::Warn => theme.unresolved,
-                Level::Error => theme.rejected,
+            let (glyph, color) = match message.level {
+                Level::Info => (symbols.info, theme.fg),
+                Level::Success => (symbols.success, theme.accepted),
+                Level::Warn => (symbols.warn, theme.unresolved),
+                Level::Error => (symbols.error, theme.rejected),
             };
             let mut style = p.style(color, theme.surface);
             if message.level != Level::Info {
                 style = style.add_modifier(Modifier::BOLD);
             }
-            Line::from(Span::styled(format!(" {}", message.text), style))
+            left.push(Span::styled(
+                format!("{}{}", icon(glyph), message.text),
+                style,
+            ));
         }
-        None => hints(app, p),
-    };
-    frame.render_widget(Paragraph::new(line).style(bar), left_area);
+        None => left.extend(hints(app, p)),
+    }
+    frame.render_widget(Paragraph::new(Line::from(left)).style(bar), left_area);
 }
 
-fn hints<'a>(app: &App, p: &Palette) -> Line<'a> {
+fn hints<'a>(app: &App, p: &Palette) -> Vec<Span<'a>> {
     let theme = p.theme;
     const HINTS: &[(Action, &str)] = &[
-        (Action::ToggleAcceptLine, "accept line"),
-        (Action::ToggleRejectLine, "reject line"),
+        (Action::ToggleAcceptLine, "accept"),
+        (Action::ToggleRejectLine, "reject"),
         (Action::TakeHunk, "take hunk"),
         (Action::TakeBoth, "both"),
-        (Action::NextConflict, "next conflict"),
+        (Action::NextConflict, "next"),
         (Action::Undo, "undo"),
         (Action::Save, "save"),
         (Action::Help, "help"),
         (Action::Quit, "quit"),
     ];
-    let mut spans = vec![Span::raw(" ")];
+    let mut spans = Vec::new();
     for (action, label) in HINTS {
         let Some(key) = app.config.keymap.hint(*action) else {
             continue;
@@ -425,7 +570,7 @@ fn hints<'a>(app: &App, p: &Palette) -> Line<'a> {
             p.style(theme.muted, theme.surface),
         ));
     }
-    Line::from(spans)
+    spans
 }
 
 /// A centered popup of at most `width` × `height` cells.
@@ -434,9 +579,9 @@ fn popup(
     area: Rect,
     width: u16,
     height: u16,
-    title: &str,
+    title: String,
+    app: &App,
     p: &Palette,
-    ascii: bool,
 ) -> Rect {
     let width = width.min(area.width.saturating_sub(2)).max(1);
     let height = height.min(area.height.saturating_sub(2)).max(1);
@@ -448,13 +593,10 @@ fn popup(
     };
     let theme = p.theme;
     let block = Block::bordered()
-        .border_type(if ascii {
-            BorderType::Plain
-        } else {
-            BorderType::Rounded
-        })
+        .border_type(border_type(app.config.ui.icons))
         .border_style(p.style(theme.accent, theme.surface))
         .style(p.bar())
+        .padding(Padding::horizontal(1))
         .title(Span::styled(
             format!(" {title} "),
             p.style(theme.accent, theme.surface)
@@ -466,10 +608,20 @@ fn popup(
     inner
 }
 
-fn draw_help(frame: &mut Frame, area: Rect, app: &App, p: &Palette, scroll: usize) {
+fn draw_help(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    p: &Palette,
+    symbols: &Symbols,
+    scroll: usize,
+) {
     let theme = p.theme;
     let key_style = p
         .style(theme.accent, theme.surface)
+        .add_modifier(Modifier::BOLD);
+    let heading = p
+        .style(theme.target, theme.surface)
         .add_modifier(Modifier::BOLD);
     let mut lines: Vec<Line> = Vec::new();
     let mut group = "";
@@ -479,11 +631,7 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App, p: &Palette, scroll: usiz
             if !lines.is_empty() {
                 lines.push(Line::default());
             }
-            lines.push(Line::styled(
-                group,
-                p.style(theme.modified, theme.surface)
-                    .add_modifier(Modifier::BOLD),
-            ));
+            lines.push(Line::styled(group, heading));
         }
         let keys = app.config.keymap.keys_for(*action);
         let keys = if keys.is_empty() {
@@ -497,12 +645,7 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App, p: &Palette, scroll: usiz
         ]));
     }
     lines.push(Line::default());
-    lines.push(Line::styled(
-        "Markers",
-        p.style(theme.modified, theme.surface)
-            .add_modifier(Modifier::BOLD),
-    ));
-    let symbols = Symbols::for_config(app.config.ui.ascii);
+    lines.push(Line::styled("Markers", heading));
     for (symbol, color, meaning) in [
         (
             symbols.accepted,
@@ -541,15 +684,8 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App, p: &Palette, scroll: usiz
         ]));
     }
 
-    let inner = popup(
-        frame,
-        area,
-        84,
-        lines.len() as u16 + 2,
-        "Keys",
-        p,
-        app.config.ui.ascii,
-    );
+    let title = format!("{}Keys", icon(symbols.keys));
+    let inner = popup(frame, area, 88, lines.len() as u16 + 2, title, app, p);
     let max_scroll = lines.len().saturating_sub(inner.height as usize);
     let scroll = scroll.min(max_scroll) as u16;
     frame.render_widget(
@@ -598,33 +734,29 @@ fn draw_files(
                 }
             };
             let bg = if index == selected {
-                theme.surface.blend(theme.fg, 0.16)
+                theme.cursor
             } else {
                 theme.surface
             };
             let marker = if index == app.current {
-                symbols.from_target
+                symbols.bar
             } else {
                 " "
             };
             Line::from(vec![
-                Span::styled(format!(" {marker} "), p.style(theme.accent, bg)),
+                Span::styled(format!("{marker} "), p.style(theme.accent, bg)),
                 Span::styled(format!("{glyph} "), p.style(color, bg)),
-                Span::styled(file.entry.path.clone(), p.style(theme.fg, bg)),
-                Span::styled(format!("  {note} "), p.style(theme.muted, bg)),
+                Span::styled(
+                    format!("{}{}", icon(symbols.file), file.entry.path),
+                    p.style(theme.fg, bg),
+                ),
+                Span::styled(format!("   {note} "), p.style(theme.muted, bg)),
             ])
             .style(Style::new().bg(p.color(bg)))
         })
         .collect();
-    let inner = popup(
-        frame,
-        area,
-        80,
-        lines.len() as u16 + 2,
-        "Conflicted files",
-        p,
-        app.config.ui.ascii,
-    );
+    let title = format!("{}Conflicted files", icon(symbols.file));
+    let inner = popup(frame, area, 84, lines.len() as u16 + 2, title, app, p);
     let scroll = (selected + 1).saturating_sub(inner.height as usize) as u16;
     frame.render_widget(
         Paragraph::new(lines).style(p.bar()).scroll((scroll, 0)),
@@ -632,7 +764,7 @@ fn draw_files(
     );
 }
 
-fn draw_confirm(frame: &mut Frame, area: Rect, app: &App, p: &Palette) {
+fn draw_confirm(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &Symbols) {
     let theme = p.theme;
     let dirty = app
         .files
@@ -650,17 +782,18 @@ fn draw_confirm(frame: &mut Frame, area: Rect, app: &App, p: &Palette) {
     let lines = vec![
         Line::styled(
             format!(
-                " {dirty} file{} with unsaved changes.",
+                "{dirty} file{} with unsaved changes.",
                 if dirty == 1 { "" } else { "s" }
             ),
             p.style(theme.unresolved, theme.surface)
                 .add_modifier(Modifier::BOLD),
         ),
         Line::default(),
-        Line::from(vec![text(" "), key("w"), text("  save all and quit")]),
-        Line::from(vec![text(" "), key("y"), text("  quit without saving")]),
-        Line::from(vec![text(" "), key("n"), text("  keep working")]),
+        Line::from(vec![key("w"), text("  save all and quit")]),
+        Line::from(vec![key("y"), text("  quit without saving")]),
+        Line::from(vec![key("n"), text("  keep working")]),
     ];
-    let inner = popup(frame, area, 44, 7, "Quit?", p, app.config.ui.ascii);
+    let title = format!("{}Quit?", icon(symbols.warn));
+    let inner = popup(frame, area, 46, 7, title, app, p);
     frame.render_widget(Paragraph::new(lines).style(p.bar()), inner);
 }

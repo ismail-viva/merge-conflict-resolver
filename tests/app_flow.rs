@@ -26,13 +26,18 @@ fn app_with(repo: &TestRepo, config: Config) -> App {
         backup: config.git.backup,
     };
     let backend = Arc::new(GitBackend::discover(repo.path(), options).unwrap());
-    let mut app = App::new(backend, config, 0).unwrap();
+    let theme = config.initial_theme(None).unwrap();
+    let mut app = App::new(backend, config, theme).unwrap();
     app.depth = ColorDepth::TrueColor;
     app
 }
 
+/// The Material dark theme with plain Unicode markers: stable to assert on.
 fn app(repo: &TestRepo) -> App {
-    app_with(repo, Config::default())
+    app_with(
+        repo,
+        Config::from_toml("[ui]\ntheme = \"dark\"\nicons = \"unicode\"").unwrap(),
+    )
 }
 
 /// Type whitespace-separated keys, e.g. `"h space g g ctrl-r"`.
@@ -376,8 +381,9 @@ fn conflict_rows_get_a_translucent_tint_and_themes_switch_at_runtime() {
     let light = Theme::light();
     let terminal = render(&mut app, 140, 40);
     assert_eq!(terminal.backend().buffer()[(0, 5)].bg, rgb(light.bg));
+    // The cycle wraps around to the default theme.
     press(&mut app, "ctrl-t");
-    assert_eq!(app.theme().name, "dark");
+    assert_eq!(app.theme().name, "tokyonight");
 
     // 256-color terminals get indexed colors only.
     app.depth = ColorDepth::Ansi256;
@@ -490,7 +496,7 @@ fn keys_layout_and_behaviour_follow_the_configuration() {
         [ui]
         layout = "stacked"
         theme = "light"
-        ascii = true
+        icons = "ascii"
         auto_advance = true
         [git]
         auto_stage = false
@@ -571,4 +577,37 @@ fn empty_inputs_are_harmless() {
     press(&mut app, "w");
     assert_eq!(std::fs::read_to_string(path("merged")).unwrap(), "");
     assert!(app.all_resolved());
+}
+
+#[test]
+fn defaults_are_tokyo_night_with_icons_and_only_the_current_line_stands_out() {
+    let repo = TestRepo::conflicted();
+    let mut app = app_with(&repo, Config::default());
+    let theme = Theme::tokyonight();
+    assert_eq!(app.theme(), &theme);
+    let rgb = |c: Rgb| Color::Rgb(c.0, c.1, c.2);
+
+    press(&mut app, "g g j");
+    let terminal = render(&mut app, 140, 40);
+    let buffer = terminal.backend().buffer();
+    let area = app.geometry.panes[Pane::Result.index()];
+    let bg_at = |row: u16| buffer[(area.x + 12, area.y + row)].bg;
+    // Row 1 holds the cursor; rows 4.. are ordinary unchanged lines.
+    assert_eq!(
+        bg_at(1),
+        rgb(theme.cursor),
+        "current line has its own background"
+    );
+    for row in [4, 5, 6] {
+        assert_eq!(
+            bg_at(row),
+            rgb(theme.bg),
+            "other plain lines carry no decoration"
+        );
+    }
+    let text = screen(&mut app);
+    assert!(
+        text.contains('\u{e0a0}') && text.contains('\u{f128}'),
+        "nerd font icons are used"
+    );
 }

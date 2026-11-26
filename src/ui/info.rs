@@ -4,7 +4,7 @@
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 
 use super::{Palette, Symbols};
@@ -62,15 +62,11 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &Sym
     let theme = p.theme;
     let on = |color: Rgb| p.style(color, theme.bg);
     let block = Block::bordered()
-        .border_type(if app.config.ui.ascii {
-            BorderType::Plain
-        } else {
-            BorderType::Rounded
-        })
+        .border_type(super::border_type(app.config.ui.icons))
         .border_style(on(theme.border))
         .style(on(theme.fg))
         .title(Span::styled(
-            " HISTORY ",
+            format!(" {}HISTORY ", super::icon(symbols.history)),
             on(theme.muted).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
@@ -125,12 +121,18 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &Sym
             let now = chrono::Utc::now().timestamp();
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!(" {} ", commit.short_sha()),
-                    on(theme.modified).add_modifier(Modifier::BOLD),
+                    format!(" {}{}", super::icon(symbols.commit), commit.short_sha()),
+                    on(theme.unresolved).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!(" {}", commit.author), on(theme.accent)),
+                Span::styled(
+                    format!("   {}{}", super::icon(symbols.author), commit.author),
+                    on(theme.accent),
+                ),
                 Span::styled(format!(" <{}>", commit.author_mail), on(theme.muted)),
-                Span::styled(format!("   {}", commit.author_date()), on(theme.fg)),
+                Span::styled(
+                    format!("   {}{}", super::icon(symbols.clock), commit.author_date()),
+                    on(theme.fg),
+                ),
                 Span::styled(
                     format!(" ({})", relative_time(commit.author_time, now)),
                     on(theme.muted),

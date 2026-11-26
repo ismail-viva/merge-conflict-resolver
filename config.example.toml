@@ -2,7 +2,9 @@
 # Location: $MCR_CONFIG, or $XDG_CONFIG_HOME/mcr/config.toml
 
 [ui]
-# "auto" (follow the terminal), "dark", "light" or a [themes.<name>] below.
+# "auto" (tokyonight, or tokyonight-day on a light terminal), "tokyonight",
+# "tokyonight-storm", "tokyonight-day", "dark", "light" (Material) or a
+# [themes.<name>] defined below.
 theme = "auto"
 # "auto" (from $COLORTERM), "truecolor" or "256".
 color = "auto"
@@ -19,8 +21,8 @@ line_numbers = true
 # Overview column marking where changes and open conflicts are.
 minimap = true
 mouse = true
-# ASCII markers for terminals / fonts without Unicode symbols.
-ascii = false
+# "nerd" (Nerd Font icons), "unicode" (plain symbols) or "ascii".
+icons = "nerd"
 tab_width = 4
 scrolloff = 3
 # Jump to the next unresolved hunk after resolving one.
@@ -95,24 +97,26 @@ cancel                 = ["esc"]  # Close a dialog / clear a pending key
 quit                   = ["q", "ctrl-c"]  # Quit
 
 # Themes: override colors of a built-in theme, or define your own.
-# `base` is "dark" (default) or "light"; `tint` is the opacity (0–1) of
+# `base` is any built-in theme (default "tokyonight"); `tint` is the opacity (0–1) of
 # diff and conflict backgrounds. Colors are "#rrggbb".
 #
 # [themes.midnight]
-# base = "dark"
+# base = "tokyonight"
 # tint = 0.20
-# bg         = "#1e1e1e"
-# surface    = "#2a2a2a"
-# fg         = "#e0e0e0"
-# muted      = "#8a8a8a"
-# border     = "#424242"
-# accent     = "#82b1ff"
-# source     = "#64b5f6"
-# target     = "#ba68c8"
-# added      = "#81c784"
-# removed    = "#e57373"
-# modified   = "#ffd54f"
-# conflict   = "#ff8a65"
-# accepted   = "#81c784"
-# rejected   = "#e57373"
-# unresolved = "#ffb74d"
+# bg         = "#1a1b26"
+# surface    = "#16161e"
+# fg         = "#c0caf5"
+# muted      = "#737aa2"
+# gutter     = "#3b4261"
+# cursor     = "#292e42"
+# border     = "#3b4261"
+# accent     = "#7aa2f7"
+# source     = "#7dcfff"
+# target     = "#bb9af7"
+# added      = "#9ece6a"
+# removed    = "#f7768e"
+# modified   = "#2ac3de"
+# conflict   = "#ff9e64"
+# accepted   = "#9ece6a"
+# rejected   = "#f7768e"
+# unresolved = "#e0af68"

@@ -24,6 +24,19 @@ pub enum LayoutMode {
     Stacked,
 }
 
+/// Which glyphs the interface may use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IconSet {
+    /// Nerd Font icons (needs a patched font, e.g. JetBrainsMono Nerd Font).
+    #[default]
+    Nerd,
+    /// Plain Unicode symbols that every modern font has.
+    Unicode,
+    /// ASCII only, including the borders.
+    Ascii,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UiConfig {
@@ -41,8 +54,8 @@ pub struct UiConfig {
     pub line_numbers: bool,
     pub minimap: bool,
     pub mouse: bool,
-    /// Use ASCII instead of Unicode for markers.
-    pub ascii: bool,
+    /// Glyphs for markers and decorations.
+    pub icons: IconSet,
     pub tab_width: u16,
     /// Lines kept visible above and below the cursor.
     pub scrolloff: u16,
@@ -63,7 +76,7 @@ impl Default for UiConfig {
             line_numbers: true,
             minimap: true,
             mouse: true,
-            ascii: false,
+            icons: IconSet::Nerd,
             tab_width: 4,
             scrolloff: 3,
             auto_advance: false,
@@ -175,9 +188,9 @@ impl Config {
         let name = if name == "auto" {
             let dark = theme::terminal_is_dark(std::env::var("COLORFGBG").ok().as_deref());
             if dark {
-                "dark"
+                "tokyonight"
             } else {
-                "light"
+                "tokyonight-day"
             }
         } else {
             name
@@ -223,7 +236,9 @@ pub fn default_config_toml() -> String {
 # Location: $MCR_CONFIG, or $XDG_CONFIG_HOME/mcr/config.toml
 
 [ui]
-# "auto" (follow the terminal), "dark", "light" or a [themes.<name>] below.
+# "auto" (tokyonight, or tokyonight-day on a light terminal), "tokyonight",
+# "tokyonight-storm", "tokyonight-day", "dark", "light" (Material) or a
+# [themes.<name>] defined below.
 theme = "{theme}"
 # "auto" (from $COLORTERM), "truecolor" or "256".
 color = "auto"
@@ -240,8 +255,8 @@ line_numbers = {line_numbers}
 # Overview column marking where changes and open conflicts are.
 minimap = {minimap}
 mouse = {mouse}
-# ASCII markers for terminals / fonts without Unicode symbols.
-ascii = {ascii}
+# "nerd" (Nerd Font icons), "unicode" (plain symbols) or "ascii".
+icons = "nerd"
 tab_width = {tab_width}
 scrolloff = {scrolloff}
 # Jump to the next unresolved hunk after resolving one.
@@ -268,7 +283,6 @@ backup = {backup}
         line_numbers = ui.line_numbers,
         minimap = ui.minimap,
         mouse = ui.mouse,
-        ascii = ui.ascii,
         tab_width = ui.tab_width,
         scrolloff = ui.scrolloff,
         auto_advance = ui.auto_advance,
@@ -299,15 +313,15 @@ backup = {backup}
     out.push_str(
         r##"
 # Themes: override colors of a built-in theme, or define your own.
-# `base` is "dark" (default) or "light"; `tint` is the opacity (0–1) of
+# `base` is any built-in theme (default "tokyonight"); `tint` is the opacity (0–1) of
 # diff and conflict backgrounds. Colors are "#rrggbb".
 #
 # [themes.midnight]
-# base = "dark"
+# base = "tokyonight"
 # tint = 0.20
 "##,
     );
-    let dark = Theme::dark();
+    let dark = Theme::tokyonight();
     for role in Theme::ROLES {
         if let Some(Rgb(r, g, b)) = dark.role(role) {
             out.push_str(&format!("# {role:<10} = \"#{r:02x}{g:02x}{b:02x}\"\n"));
@@ -325,7 +339,8 @@ mod tests {
         let config = Config::from_toml("").unwrap();
         assert_eq!(config.ui, UiConfig::default());
         assert_eq!(config.git, GitConfig::default());
-        assert_eq!(config.themes.len(), 2);
+        assert_eq!(config.themes.len(), Theme::BUILTIN.len());
+        assert_eq!(config.ui.icons, IconSet::Nerd);
     }
 
     #[test]
@@ -348,7 +363,7 @@ mod tests {
             layout = "stacked"
             panel_ratio = [2, 3, 2]
             color = "256"
-            ascii = true
+            icons = "ascii"
 
             [git]
             auto_stage = false
@@ -372,7 +387,10 @@ mod tests {
         let index = config.initial_theme(None).unwrap();
         assert_eq!(config.themes[index].name, "midnight");
         assert_eq!(config.themes[index].accent, Rgb(0, 0xe5, 0xff));
-        assert_eq!(config.initial_theme(Some("light")).unwrap(), 1);
+        assert_eq!(
+            config.themes[config.initial_theme(Some("light")).unwrap()].name,
+            "light"
+        );
         assert!(config.initial_theme(Some("nope")).is_err());
     }
 
