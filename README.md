@@ -5,7 +5,7 @@ branch is on the left, your branch on the right, and the merged result in the
 middle. Resolve conflicts hunk by hunk or line by line, mix lines from both
 sides, and undo anything — with editor-grade syntax highlighting throughout.
 
-![mcr resolving a merge: source branch, merged result and target branch side by side](docs/screenshot.png)
+![mcr resolving a Python merge in the default Tokyo Night theme: source branch, merged result and target branch side by side](docs/screenshot.png)
 
 ## Install
 
@@ -98,6 +98,10 @@ Choose one with `ui.theme` or `--theme`, and switch while running with
 `ctrl-t`. `theme = "auto"` picks `tokyonight`, or `tokyonight-day` on a light
 terminal.
 
+| Tokyo Night (default) | Tokyo Night Day |
+| --- | --- |
+| ![A TSX merge in the Tokyo Night theme](docs/screenshot-tsx.png) | ![The same merge in the light Tokyo Night Day theme](docs/screenshot-day.png) |
+
 **Adding a theme.** Drop a file into `themes/` next to your config file; its
 name is the theme's name:
 
@@ -111,6 +115,8 @@ mcr --theme catppuccin-mocha
 commented theme to copy from. Every key is optional — what a theme leaves out
 comes from its `base` — so adjusting a built-in theme takes a few lines. The
 same keys also work inline in `config.toml` (see [Configuration](#configuration)).
+
+![The same merge with the Catppuccin Mocha theme file installed](docs/screenshot-catppuccin.png)
 
 ## Reading the Screen
 
@@ -258,11 +264,12 @@ palette; `ui.icons = "ascii"` keeps markers and borders to plain ASCII.
 src/
   core/      merge engine — no I/O, no UI
     diff3.rs     three-way line diff → hunks
-    session.rs   per-line resolution state, operations (command pattern), output
+    session.rs   per-line resolution state, operations (command pattern), output,
+                 snapshots for resuming
     history.rs   undo / redo (mementos of hunk state)
   git/       where inputs come from and results go: the MergeBackend trait,
              implemented for a repository (via the git CLI) and for plain files;
-             blame parsing (not shown in the interface at present)
+             saved progress; blame parsing (not shown in the interface at present)
   syntax.rs  tree-sitter highlighting into theme-independent tokens
   config/    config file, keymap (multi-key sequences), themes
   action.rs  the commands a key can trigger
@@ -286,6 +293,9 @@ cargo fmt --check
 The integration tests build real repositories in temporary directories
 (merge, rebase, add/add, delete/modify, odd file names) and drive the app
 with key events against an in-memory terminal.
+
+The screenshots in `docs/` are captures of the real program on a 150×40
+terminal with JetBrainsMono Nerd Font.
 
 ## Limitations
 

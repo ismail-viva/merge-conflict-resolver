@@ -622,11 +622,12 @@ fn hunk_summary(view: &FileView) -> (String, HunkStatus) {
         HunkKind::Conflict => "conflict",
     };
     let pending = session.pending(hunk);
+    let lines = if pending == 1 { "" } else { "s" };
     let status_text = match status {
         HunkStatus::Unchanged => "unchanged".to_owned(),
         HunkStatus::Auto => "merged automatically".to_owned(),
-        HunkStatus::Unresolved => format!("{pending} lines pending"),
-        HunkStatus::Partial => format!("partial, {pending} lines pending"),
+        HunkStatus::Unresolved => format!("{pending} line{lines} pending"),
+        HunkStatus::Partial => format!("partial, {pending} line{lines} pending"),
         HunkStatus::Resolved => "resolved".to_owned(),
         HunkStatus::Modified => "edited by hand".to_owned(),
     };
