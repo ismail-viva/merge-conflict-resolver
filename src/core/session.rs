@@ -9,6 +9,8 @@
 //! * a hunk with any [`LineState::Unresolved`] line is never dropped from the
 //!   output: it is written with conflict markers instead.
 
+use serde::{Deserialize, Serialize};
+
 use super::diff3::{diff3, Hunk, HunkKind};
 use super::history::{Change, Entry, History};
 use super::text::{dominant_eol, split_lines};
@@ -255,6 +257,55 @@ pub struct Stats {
 pub struct MergeOutput {
     pub text: String,
     pub unresolved: usize,
+}
+
+/// A session's resolution state in a form that can be written to disk and
+/// applied to a fresh session over the same three inputs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snapshot {
+    version: u32,
+    /// Identifies the inputs the state belongs to.
+    fingerprint: String,
+    /// The hunk the cursor was on, for the interface to return to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor_hunk: Option<usize>,
+    #[serde(default)]
+    hunks: Vec<HunkSnapshot>,
+}
+
+/// One hunk that differs from its initial state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HunkSnapshot {
+    index: usize,
+    /// One letter per line: `u`nresolved, `a`ccepted, `r`ejected.
+    source: String,
+    target: String,
+    /// Accepted lines in output order, e.g. `s0`, `t2`.
+    picked: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    custom: Option<Vec<String>>,
+}
+
+const SNAPSHOT_VERSION: u32 = 1;
+
+impl Snapshot {
+    /// Note which hunk the user was working on.
+    pub fn with_cursor(mut self, hunk: usize) -> Self {
+        self.cursor_hunk = Some(hunk);
+        self
+    }
+
+    pub fn cursor_hunk(&self) -> Option<usize> {
+        self.cursor_hunk
+    }
+
+    pub fn to_toml(&self) -> String {
+        toml::to_string(self).unwrap_or_default()
+    }
+
+    pub fn from_toml(text: &str) -> Option<Snapshot> {
+        toml::from_str(text).ok()
+    }
 }
 
 const MARKER_LEN: usize = 7;
@@ -581,6 +632,91 @@ impl MergeSession {
         Ok(state)
     }
 
+    // ---- persistence ----------------------------------------------------
+
+    /// A stable digest of the three inputs (FNV-1a, so it does not change
+    /// between builds).
+    pub fn fingerprint(&self) -> String {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let mut feed = |bytes: &[u8]| {
+            for byte in bytes {
+                hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        for lines in [&self.base, &self.source, &self.target] {
+            for line in lines {
+                feed(line.as_bytes());
+            }
+            // Separate the inputs so moving text between them changes the digest.
+            feed(&[0xff]);
+        }
+        format!("{hash:016x}")
+    }
+
+    /// The current resolution of every hunk that was touched.
+    pub fn snapshot(&self) -> Snapshot {
+        let letters = |states: &[LineState]| {
+            states
+                .iter()
+                .map(|state| match state {
+                    LineState::Unresolved => 'u',
+                    LineState::Accepted => 'a',
+                    LineState::Rejected => 'r',
+                })
+                .collect::<String>()
+        };
+        let hunks = self
+            .states
+            .iter()
+            .enumerate()
+            .filter(|(index, state)| **state != initial_state(&self.hunks[*index]))
+            .map(|(index, state)| HunkSnapshot {
+                index,
+                source: letters(&state.source),
+                target: letters(&state.target),
+                picked: state
+                    .picked
+                    .iter()
+                    .map(|line| match line.side {
+                        Side::Source => format!("s{}", line.index),
+                        Side::Target => format!("t{}", line.index),
+                    })
+                    .collect(),
+                custom: state.custom.clone(),
+            })
+            .collect();
+        Snapshot {
+            version: SNAPSHOT_VERSION,
+            fingerprint: self.fingerprint(),
+            cursor_hunk: None,
+            hunks,
+        }
+    }
+
+    /// Apply a snapshot taken from a session over the same inputs. Nothing
+    /// changes unless the whole snapshot fits; returns whether it did. The
+    /// undo history starts empty.
+    pub fn restore(&mut self, snapshot: &Snapshot) -> bool {
+        if snapshot.version != SNAPSHOT_VERSION || snapshot.fingerprint != self.fingerprint() {
+            return false;
+        }
+        let mut restored = Vec::new();
+        for saved in &snapshot.hunks {
+            match self
+                .hunks
+                .get(saved.index)
+                .and_then(|hunk| decode_state(hunk, saved))
+            {
+                Some(state) => restored.push((saved.index, state)),
+                None => return false,
+            }
+        }
+        for (index, state) in restored {
+            self.states[index] = state;
+        }
+        true
+    }
+
     // ---- output ----------------------------------------------------------
 
     /// The hunk as a standard (diff3-style) conflict block.
@@ -656,6 +792,59 @@ fn op_hunk(op: &Op) -> usize {
         | Op::SetCustom { hunk, .. } => *hunk,
         Op::TakeSideEverywhere { .. } => unreachable!("bulk op has no single hunk"),
     }
+}
+
+/// Rebuild a hunk's state from its saved form, checking every invariant.
+fn decode_state(hunk: &Hunk, saved: &HunkSnapshot) -> Option<HunkState> {
+    let states = |letters: &str, len: usize| -> Option<Vec<LineState>> {
+        let states: Option<Vec<LineState>> = letters
+            .chars()
+            .map(|letter| match letter {
+                'u' => Some(LineState::Unresolved),
+                'a' => Some(LineState::Accepted),
+                'r' => Some(LineState::Rejected),
+                _ => None,
+            })
+            .collect();
+        states.filter(|states| states.len() == len)
+    };
+    if hunk.kind == HunkKind::Unchanged {
+        // An unchanged hunk has no line states; it can only be hand-edited.
+        let plain = saved.source.is_empty() && saved.target.is_empty() && saved.picked.is_empty();
+        return (plain && saved.custom.is_some()).then(|| HunkState {
+            custom: saved.custom.clone(),
+            ..HunkState::default()
+        });
+    }
+    let mut state = HunkState {
+        source: states(&saved.source, hunk.source.len())?,
+        target: states(&saved.target, hunk.target.len())?,
+        picked: Vec::new(),
+        custom: saved.custom.clone(),
+    };
+    for entry in &saved.picked {
+        let (side, index) = entry.split_at_checked(1)?;
+        let line = LineRef {
+            side: match side {
+                "s" => Side::Source,
+                "t" => Side::Target,
+                _ => return None,
+            },
+            index: index.parse().ok()?,
+        };
+        let accepted = state.side(line.side).get(line.index) == Some(&LineState::Accepted);
+        if !accepted || state.picked.contains(&line) {
+            return None;
+        }
+        state.picked.push(line);
+    }
+    let accepted = state
+        .source
+        .iter()
+        .chain(&state.target)
+        .filter(|s| **s == LineState::Accepted)
+        .count();
+    (accepted == state.picked.len()).then_some(state)
 }
 
 /// The state a hunk starts in: non-conflicting changes are resolved the way
@@ -1134,5 +1323,138 @@ mod tests {
             });
         }
         assert_eq!(s.output().text, TARGET);
+    }
+
+    #[test]
+    fn a_snapshot_restores_the_exact_resolution() {
+        let mut s = session();
+        let h = conflict(&s);
+        let auto = s
+            .hunks()
+            .iter()
+            .position(|x| x.kind == HunkKind::TargetOnly)
+            .unwrap();
+        s.apply(Op::ToggleAccept {
+            hunk: h,
+            line: src(1),
+        })
+        .unwrap();
+        s.apply(Op::ToggleAccept {
+            hunk: h,
+            line: tgt(0),
+        })
+        .unwrap();
+        s.apply(Op::ToggleReject {
+            hunk: h,
+            line: src(0),
+        })
+        .unwrap();
+        s.apply(Op::TakeNone { hunk: auto }).unwrap();
+        let unchanged = s
+            .hunks()
+            .iter()
+            .position(|x| x.kind == HunkKind::Unchanged)
+            .unwrap();
+        s.apply(Op::SetCustom {
+            hunk: unchanged,
+            lines: vec!["edited \"by\" hand\n".into(), "\ttab\n".into()],
+        })
+        .unwrap();
+
+        let text = s.snapshot().to_toml();
+        let snapshot = Snapshot::from_toml(&text).expect("the snapshot parses back");
+        let mut fresh = session();
+        assert!(fresh.restore(&snapshot));
+        assert_eq!(fresh.output(), s.output());
+        for hunk in 0..s.hunks().len() {
+            assert_eq!(fresh.status(hunk), s.status(hunk), "hunk {hunk}");
+        }
+        assert_eq!(
+            texts(&fresh, h),
+            ["TWO-src-b", "TWO-tgt"],
+            "pick order survives"
+        );
+        assert!(!fresh.can_undo(), "restoring is not an edit");
+        assert_eq!(fresh.revision(), 0);
+        assert_eq!(fresh.snapshot(), snapshot);
+    }
+
+    #[test]
+    fn an_untouched_session_has_an_empty_snapshot() {
+        let s = session();
+        let snapshot = s.snapshot();
+        assert!(snapshot.hunks.is_empty());
+        let mut fresh = session();
+        assert!(fresh.restore(&snapshot));
+        assert_eq!(fresh.output(), s.output());
+    }
+
+    #[test]
+    fn snapshots_of_other_inputs_or_broken_ones_are_refused() {
+        let mut s = session();
+        let h = conflict(&s);
+        s.apply(Op::TakeSide {
+            hunk: h,
+            side: Side::Source,
+        })
+        .unwrap();
+        let good = s.snapshot();
+
+        let mut other = MergeSession::new(MergeInput {
+            base: BASE.into(),
+            source: SOURCE.replace("six", "seven"),
+            target: TARGET.into(),
+            labels: Labels::default(),
+        });
+        assert!(!other.restore(&good), "different inputs");
+
+        let untouched = session().output();
+        let broken = |edit: &dyn Fn(&mut HunkSnapshot)| {
+            let mut snapshot = good.clone();
+            edit(&mut snapshot.hunks[0]);
+            let mut fresh = session();
+            let restored = fresh.restore(&snapshot);
+            assert_eq!(
+                fresh.output(),
+                untouched,
+                "a refused snapshot changes nothing"
+            );
+            restored
+        };
+        assert!(!broken(&|hunk| hunk.index = 99));
+        assert!(!broken(&|hunk| hunk.source.push('a')));
+        assert!(!broken(&|hunk| hunk.source = "zz".into()));
+        assert!(
+            !broken(&|hunk| hunk.picked.push("t0".into())),
+            "picked but rejected"
+        );
+        assert!(
+            !broken(&|hunk| hunk.picked.clear()),
+            "accepted but not picked"
+        );
+        assert!(!broken(&|hunk| hunk.picked[0] = "s9".into()));
+        assert!(
+            !broken(&|hunk| hunk.picked[1] = "s0".into()),
+            "picked twice"
+        );
+        assert!(Snapshot::from_toml("not toml at all [").is_none());
+    }
+
+    #[test]
+    fn the_fingerprint_depends_on_each_input() {
+        let make = |base: &str, source: &str, target: &str| {
+            MergeSession::new(MergeInput {
+                base: base.into(),
+                source: source.into(),
+                target: target.into(),
+                labels: Labels::default(),
+            })
+            .fingerprint()
+        };
+        let reference = make("a\n", "b\n", "c\n");
+        assert_eq!(reference, make("a\n", "b\n", "c\n"));
+        assert_ne!(reference, make("a\n", "c\n", "b\n"));
+        assert_ne!(reference, make("a\nb\n", "", "c\n"));
+        assert_ne!(reference, make("a\n", "b\n", "c"));
     }
 }

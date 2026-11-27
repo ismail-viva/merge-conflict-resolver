@@ -552,6 +552,10 @@ fn draw_tabs(frame: &mut Frame, area: Rect, app: &App, p: &Palette, symbols: &Sy
             (Some(_), _) => {
                 Span::styled(format!("{} ", symbols.rejected), p.style(theme.muted, bg))
             }
+            (None, None) if file.entry.resolved => Span::styled(
+                format!("{} ", symbols.accepted),
+                p.style(theme.accepted, bg),
+            ),
             (None, None) => Span::styled(
                 format!("{} ", symbols.unresolved),
                 p.style(theme.unresolved, bg),
@@ -883,6 +887,11 @@ fn draw_files(
         .map(|(index, file)| {
             let (glyph, color, note) = match (&file.entry.unsupported, &file.view) {
                 (Some(reason), _) => (symbols.rejected, theme.muted, reason.clone()),
+                (None, None) if file.entry.resolved => (
+                    symbols.accepted,
+                    theme.accepted,
+                    "resolved · saved".to_owned(),
+                ),
                 (None, None) => (
                     symbols.unresolved,
                     theme.unresolved,

@@ -18,6 +18,8 @@ use crate::core::{Labels, MergeInput, Side};
 
 const MODE_SYMLINK: &str = "120000";
 const MODE_SUBMODULE: &str = "160000";
+/// Directory under `.git/` holding one progress file per conflicted path.
+const PROGRESS_DIR: &str = "mcr-session";
 
 #[derive(Debug, Clone, Copy)]
 pub struct GitOptions {
@@ -61,8 +63,6 @@ pub struct GitBackend {
     options: GitOptions,
     /// Paths already backed up during this run.
     backed_up: Mutex<HashSet<String>>,
-    /// Paths this run marked as resolved.
-    staged: Mutex<HashSet<String>>,
 }
 
 impl GitBackend {
@@ -84,7 +84,6 @@ impl GitBackend {
             git_dir,
             options,
             backed_up: Mutex::default(),
-            staged: Mutex::default(),
         })
     }
 
@@ -112,8 +111,19 @@ impl GitBackend {
         Ok(String::from_utf8_lossy(&self.git(args)?).trim().to_owned())
     }
 
+    /// Index stages of the paths git still considers unmerged.
     fn stages(&self, path: Option<&str>) -> GitResult<BTreeMap<String, Stages>> {
-        let mut args = vec!["ls-files", "-u", "-z"];
+        self.list_stages("-u", path)
+    }
+
+    /// Stages git kept for paths whose conflict was already resolved
+    /// (`git add`ed) during the operation in progress.
+    fn resolved_stages(&self, path: Option<&str>) -> GitResult<BTreeMap<String, Stages>> {
+        self.list_stages("--resolve-undo", path)
+    }
+
+    fn list_stages(&self, which: &str, path: Option<&str>) -> GitResult<BTreeMap<String, Stages>> {
+        let mut args = vec!["ls-files", which, "-z"];
         if let Some(path) = path {
             args.extend(["--", path]);
         }
@@ -216,6 +226,11 @@ impl GitBackend {
         }
     }
 
+    /// Where the resolution progress of `path` is kept between runs.
+    fn progress_file(&self, path: &str) -> PathBuf {
+        self.git_dir.join(PROGRESS_DIR).join(format!("{path}.toml"))
+    }
+
     fn backup(&self, path: &str) -> GitResult<Option<PathBuf>> {
         if !self.options.backup {
             return Ok(None);
@@ -252,7 +267,29 @@ impl MergeBackend for GitBackend {
     }
 
     fn conflicts(&self) -> GitResult<Vec<ConflictEntry>> {
-        let entries = self.stages(None)?.into_iter().map(|(path, stages)| {
+        let unmerged = self.stages(None)?;
+        let in_progress = self.incoming().is_some();
+        if unmerged.is_empty() && !in_progress {
+            // No merge is under way any more: saved progress is obsolete.
+            let _ = std::fs::remove_dir_all(self.git_dir.join(PROGRESS_DIR));
+        }
+        let mut entries: BTreeMap<String, ConflictEntry> = BTreeMap::new();
+        if in_progress {
+            // Paths resolved in an earlier run stay listed, so the work can
+            // be reviewed or picked up again — but only our own: a path
+            // the user resolved by other means has no progress file.
+            for (path, _) in self.resolved_stages(None)? {
+                if !unmerged.contains_key(&path) && self.progress_file(&path).is_file() {
+                    let entry = ConflictEntry {
+                        path: path.clone(),
+                        unsupported: None,
+                        resolved: true,
+                    };
+                    entries.insert(path, entry);
+                }
+            }
+        }
+        for (path, stages) in unmerged {
             let mode_is = |mode: &str| stages.iter().flatten().any(|s| s.mode == mode);
             let unsupported = if stages[1].is_none() || stages[2].is_none() {
                 Some("deleted on one side — resolve with `git add` or `git rm`".to_owned())
@@ -263,15 +300,27 @@ impl MergeBackend for GitBackend {
             } else {
                 None
             };
-            ConflictEntry { path, unsupported }
-        });
-        Ok(entries.collect())
+            let entry = ConflictEntry {
+                path: path.clone(),
+                unsupported,
+                resolved: false,
+            };
+            entries.insert(path, entry);
+        }
+        Ok(entries.into_values().collect())
     }
 
     fn load(&self, path: &str) -> GitResult<MergeInput> {
-        let stages = self.stages(Some(path))?.remove(path).ok_or_else(|| {
-            GitError::Unsupported(format!("{path} has no unresolved conflict in the index"))
-        })?;
+        let stages = match self.stages(Some(path))?.remove(path) {
+            Some(stages) => stages,
+            // Already staged: git keeps the three versions until the commit.
+            None => self
+                .resolved_stages(Some(path))?
+                .remove(path)
+                .ok_or_else(|| {
+                    GitError::Unsupported(format!("{path} has no conflict in the index"))
+                })?,
+        };
         let context = self.context();
         Ok(MergeInput {
             base: self.blob(&stages[0], "the common ancestor")?,
@@ -287,22 +336,38 @@ impl MergeBackend for GitBackend {
 
     fn save(&self, path: &str, content: &str, resolved: bool) -> GitResult<SaveOutcome> {
         let backup = self.backup(path)?;
-        let mut staged = self.staged.lock().unwrap_or_else(|e| e.into_inner());
-        if !resolved && staged.remove(path) {
-            // We staged this path earlier; hand the conflict back to git
-            // before writing markers again.
+        if !resolved && self.stages(Some(path))?.is_empty() {
+            // The path was staged as resolved earlier (in this run or a
+            // previous one); hand the conflict back to git before writing
+            // markers again.
             self.git(&["update-index", "--unresolve", "--", path])?;
         }
         std::fs::write(self.root.join(path), content)?;
         let stage = resolved && self.options.auto_stage;
         if stage {
             self.git(&["add", "--", path])?;
-            staged.insert(path.to_owned());
         }
         Ok(SaveOutcome {
             staged: stage,
             backup,
         })
+    }
+
+    fn current_content(&self, path: &str) -> Option<String> {
+        std::fs::read_to_string(self.root.join(path)).ok()
+    }
+
+    fn load_progress(&self, path: &str) -> Option<String> {
+        std::fs::read_to_string(self.progress_file(path)).ok()
+    }
+
+    fn save_progress(&self, path: &str, progress: &str) -> GitResult<()> {
+        let file = self.progress_file(path);
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(file, progress)?;
+        Ok(())
     }
 
     fn blame(&self, path: &str, side: Side) -> GitResult<Option<Blame>> {

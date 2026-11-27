@@ -43,6 +43,19 @@ As a `git mergetool`:
 3. `w` writes the file. Once nothing is unresolved it is also `git add`ed.
 4. `] f` moves to the next file; `q` quits. Finish with `git commit`.
 
+### Saving and Resuming
+
+`w` writes the file and remembers every decision you made in it. Quit
+whenever you like: the next `mcr` in the same merge picks up where you
+saved — accepted and rejected lines, their order, hand edits and the cursor
+position. Files you already finished stay in the tab row with a `✓`, so you
+can review or change them until you commit.
+
+Progress is kept under `.git/mcr-session/` and removed once the merge is
+over. It is only resumed while it still describes reality: if the file on
+disk is no longer what `mcr` saved (you edited it elsewhere, or restarted the
+merge), that file starts fresh. The undo history is not carried across runs.
+
 ## Look
 
 The panes have no borders: each has a header strip, underlined in its color
@@ -176,7 +189,7 @@ whatever is still pending.
   resolved, `git update-index --unresolve` if you later reopen it. mcr never
   commits.
 * **Nothing is written until you save**, and quitting with unsaved work asks
-  first.
+  first. Saved work is resumed on the next run, never silently replaced.
 * The working-tree file as it was before the first save is kept under
   `.git/mcr-backup/`.
 * Files are written byte-exact: CRLF stays CRLF, a missing final newline
