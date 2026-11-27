@@ -48,6 +48,7 @@ impl MergeBackend for FileBackend {
         Ok(vec![ConflictEntry {
             path: self.display(),
             unsupported: None,
+            resolved: false,
         }])
     }
 

@@ -1,0 +1,51 @@
+# Catppuccin Mocha for mcr — and a template for your own theme.
+#
+# Install:  cp themes/catppuccin-mocha.toml ~/.config/mcr/themes/
+# Use:      mcr --theme catppuccin-mocha       (or `theme = "catppuccin-mocha"`
+#           under [ui] in config.toml; ctrl-t switches themes while running)
+#
+# The file name is the theme's name. Every key is optional: whatever is left
+# out comes from `base`, so a theme can be as small as two lines.
+
+base = "tokyonight"   # any built-in theme
+tint = 0.18           # opacity of diff / conflict backgrounds, 0–1
+
+# ── Interface ────────────────────────────────────────────────────────────
+bg         = "#1e1e2e"   # window background
+surface    = "#181825"   # title bar, tabs, status bar, popups
+fg         = "#cdd6f4"   # text
+muted      = "#7f849c"   # hints, secondary and rejected text
+gutter     = "#45475a"   # line numbers
+cursor     = "#313244"   # background of the current line
+border     = "#45475a"   # rules and dividers
+accent     = "#89b4fa"   # focus, cursor bar, keys
+source     = "#89dceb"   # the incoming branch ("theirs")
+target     = "#cba6f7"   # the current branch ("ours")
+added      = "#a6e3a1"   # lines added relative to the ancestor
+removed    = "#f38ba8"   # lines removed
+modified   = "#74c7ec"   # lines changed; manual edits
+conflict   = "#fab387"   # conflicting hunks
+accepted   = "#a6e3a1"   # accepted lines
+rejected   = "#f38ba8"   # rejected lines
+unresolved = "#f9e2af"   # lines and hunks awaiting a decision
+
+# ── Source code ──────────────────────────────────────────────────────────
+[syntax]
+keyword          = "#cba6f7"   # def, fn, const, class
+keyword_control  = "#cba6f7"   # return, if, for, import (italic)
+function         = "#89b4fa"
+function_builtin = "#89dceb"
+type             = "#f9e2af"   # types, classes, components
+type_builtin     = "#f9e2af"   # int, str, f64
+constant         = "#fab387"   # numbers, booleans, constants
+string           = "#a6e3a1"
+escape           = "#f5c2e7"   # escapes, interpolation braces
+comment          = "#7f849c"   # (italic)
+property         = "#b4befe"   # fields, keys, tag attributes
+parameter        = "#eba0ac"
+variable         = "#cdd6f4"
+variable_builtin = "#f38ba8"   # self, this
+operator         = "#89dceb"
+punctuation      = "#9399b2"
+tag              = "#f38ba8"   # markup tags: <section>
+attribute        = "#f9e2af"   # decorators: @dataclass, #[derive]

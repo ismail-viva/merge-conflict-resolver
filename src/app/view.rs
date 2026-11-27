@@ -5,7 +5,10 @@
 //! row index addresses the same hunk in all three panes — that is what keeps
 //! navigation and scrolling synchronized.
 
-use crate::core::{HunkKind, MergeSession, Side};
+use std::collections::HashMap;
+
+use crate::core::{HunkKind, MergeSession, Origin, Side};
+use crate::syntax::{self, Highlighted, Language};
 
 /// One of the three panes, left to right.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -127,11 +130,26 @@ pub struct FileView {
     /// Session revision that is on disk (0 = nothing written yet).
     pub saved_revision: u64,
     pub last_save: Option<SaveInfo>,
+    language: Option<Language>,
+    /// Syntax of the source and target file.
+    syntax: [Option<Highlighted>; 2],
+    /// Syntax of hand-edited hunks, with the text it was computed from.
+    custom_syntax: HashMap<usize, (String, Highlighted)>,
 }
 
 impl FileView {
+    /// A view without syntax highlighting.
     pub fn new(session: MergeSession) -> Self {
+        Self::with_language(session, None)
+    }
+
+    /// A view whose text is highlighted as `language`, if one is given.
+    pub fn with_language(session: MergeSession, language: Option<Language>) -> Self {
         let rows = RowLayout::build(&session);
+        let highlight = |side: Side| {
+            language.and_then(|language| syntax::highlight(language, &session.lines(side).concat()))
+        };
+        let syntax = [highlight(Side::Source), highlight(Side::Target)];
         let mut view = Self {
             session,
             rows,
@@ -140,6 +158,9 @@ impl FileView {
             hscroll: 0,
             saved_revision: 0,
             last_save: None,
+            language,
+            syntax,
+            custom_syntax: HashMap::new(),
         };
         // Start on the first thing that needs attention.
         if let Some(hunk) = view.find_hunk(0, true, |v, h| v.session.status(h).is_open()) {
@@ -188,6 +209,63 @@ impl FileView {
             self.cursor = self.rows.start(hunk) + offset.min(self.rows.height(hunk) - 1);
         }
         self.cursor = self.cursor.min(self.max_row());
+        self.refresh_custom_syntax();
+    }
+
+    /// Keep the syntax of hand-edited hunks in step with their text.
+    fn refresh_custom_syntax(&mut self) {
+        let Some(language) = self.language else {
+            return;
+        };
+        let session = &self.session;
+        self.custom_syntax
+            .retain(|hunk, _| session.is_custom(*hunk));
+        for hunk in (0..session.hunks().len()).filter(|h| session.is_custom(*h)) {
+            let text: String = session.result_lines(hunk).map(|line| line.text).collect();
+            if self
+                .custom_syntax
+                .get(&hunk)
+                .is_some_and(|(cached, _)| *cached == text)
+            {
+                continue;
+            }
+            match syntax::highlight(language, &text) {
+                Some(highlighted) => self.custom_syntax.insert(hunk, (text, highlighted)),
+                None => self.custom_syntax.remove(&hunk),
+            };
+        }
+    }
+
+    /// Syntax tokens of the line a pane shows at `offset` in `hunk`.
+    pub fn syntax_at(&self, pane: Pane, hunk: usize, offset: usize) -> &[syntax::Span] {
+        let h = self.session.hunk(hunk);
+        let of_side = |side: Side, index: usize| {
+            let (range, slot) = match side {
+                Side::Source => (&h.source, 0),
+                Side::Target => (&h.target, 1),
+            };
+            match &self.syntax[slot] {
+                Some(highlighted) if index < range.len() => highlighted.line(range.start + index),
+                _ => &[],
+            }
+        };
+        match pane.side() {
+            Some(side) => of_side(side, offset),
+            // A result line is colored like the line it was taken from.
+            None => match self
+                .session
+                .result_line(hunk, offset)
+                .map(|line| line.origin)
+            {
+                Some(Origin::Unchanged) => of_side(Side::Target, offset),
+                Some(Origin::Line(line)) => of_side(line.side, line.index),
+                Some(Origin::Custom) => self
+                    .custom_syntax
+                    .get(&hunk)
+                    .map_or(&[], |(_, highlighted)| highlighted.line(offset)),
+                None => &[],
+            },
+        }
     }
 
     /// Adjust scrolling so the cursor is inside the viewport with a margin.

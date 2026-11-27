@@ -326,3 +326,79 @@ fn file_backend_merges_plain_files() {
         "a local\na remote\n"
     );
 }
+
+#[test]
+fn progress_survives_a_restart_and_resolved_files_stay_listed() {
+    let repo = TestRepo::conflicted();
+    {
+        let git = backend(&repo);
+        let mut session = MergeSession::new(git.load("other.txt").unwrap());
+        session
+            .apply(Op::TakeSideEverywhere { side: Side::Source })
+            .unwrap();
+        git.save("other.txt", &session.output().text, true).unwrap();
+        git.save_progress("other.txt", &session.snapshot().to_toml())
+            .unwrap();
+    }
+
+    // A new process: the resolved file is still listed and loadable.
+    let git = backend(&repo);
+    let conflicts = git.conflicts().unwrap();
+    let state: Vec<(&str, bool)> = conflicts
+        .iter()
+        .map(|c| (c.path.as_str(), c.resolved))
+        .collect();
+    assert_eq!(state, [("file.txt", false), ("other.txt", true)]);
+    assert_eq!(
+        repo.unmerged(),
+        ["file.txt"],
+        "git still sees it as resolved"
+    );
+
+    let mut session = MergeSession::new(git.load("other.txt").unwrap());
+    let snapshot =
+        mcr::core::Snapshot::from_toml(&git.load_progress("other.txt").unwrap()).unwrap();
+    assert!(session.restore(&snapshot));
+    assert_eq!(session.output().text, "x source\n");
+    assert_eq!(git.load_progress("file.txt"), None);
+
+    // Reopening the decision hands the conflict back to git.
+    session.apply(Op::Reset { hunk: 0 }).unwrap();
+    git.save("other.txt", &session.output().text, false)
+        .unwrap();
+    assert_eq!(repo.unmerged(), ["file.txt", "other.txt"]);
+}
+
+#[test]
+fn files_resolved_without_mcr_are_not_listed_and_progress_is_cleaned_up() {
+    let repo = TestRepo::conflicted();
+    let git = backend(&repo);
+    // Resolved by hand with plain git: none of our business.
+    repo.write("other.txt", "x by hand\n");
+    repo.git(&["add", "other.txt"]);
+    let paths: Vec<String> = git
+        .conflicts()
+        .unwrap()
+        .into_iter()
+        .map(|c| c.path)
+        .collect();
+    assert_eq!(paths, ["file.txt"]);
+
+    git.save("file.txt", "all merged\n", true).unwrap();
+    git.save_progress("file.txt", "version = 1").unwrap();
+    assert_eq!(
+        git.conflicts().unwrap().len(),
+        1,
+        "listed while the merge is open"
+    );
+    repo.git(&["commit", "-q", "--no-edit"]);
+    assert!(
+        git.conflicts().unwrap().is_empty(),
+        "nothing is listed after the commit"
+    );
+    assert_eq!(
+        git.load_progress("file.txt"),
+        None,
+        "stale progress is removed"
+    );
+}

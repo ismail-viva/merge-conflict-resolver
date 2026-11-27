@@ -15,8 +15,9 @@ use ratatui::layout::{Position, Rect};
 use crate::action::Action;
 use crate::config::{ColorDepth, Config, Key, LayoutMode, Lookup, Theme};
 use crate::core::text::split_lines;
-use crate::core::{LineRef, MergeSession, Op, OpError, Origin, Side};
+use crate::core::{LineRef, MergeSession, Op, OpError, Origin, Side, Snapshot};
 use crate::git::{ConflictEntry, MergeContext, SharedBackend};
+use crate::syntax::Language;
 
 pub use view::{FileView, Pane, RowLayout, SaveInfo};
 
@@ -99,9 +100,11 @@ pub struct App {
 impl App {
     pub fn new(backend: SharedBackend, config: Config, theme_index: usize) -> anyhow::Result<App> {
         let entries = backend.conflicts()?;
+        // Start with a file that still needs work, if there is one.
         let first = entries
             .iter()
-            .position(|e| e.unsupported.is_none())
+            .position(|e| e.unsupported.is_none() && !e.resolved)
+            .or_else(|| entries.iter().position(|e| e.unsupported.is_none()))
             .ok_or_else(|| anyhow::anyhow!("no conflict that can be resolved line by line"))?;
         let mut app = App {
             context: backend.context(),
@@ -156,10 +159,10 @@ impl App {
 
     /// Whether every conflicted file has been written fully resolved.
     pub fn all_resolved(&self) -> bool {
-        self.files.iter().all(|f| {
-            f.view.as_ref().is_some_and(|v| {
-                !v.is_dirty() && v.last_save.is_some_and(|save| save.unresolved == 0)
-            })
+        self.files.iter().all(|f| match &f.view {
+            Some(v) => !v.is_dirty() && v.last_save.is_some_and(|save| save.unresolved == 0),
+            // Resolved in an earlier run and not reopened since.
+            None => f.entry.resolved,
         })
     }
 
@@ -170,6 +173,7 @@ impl App {
             .map(|file| {
                 let state = match (&file.entry.unsupported, &file.view) {
                     (Some(reason), _) => format!("skipped ({reason})"),
+                    (None, None) if file.entry.resolved => "resolved and staged".to_owned(),
                     (None, None) => "not opened".to_owned(),
                     (None, Some(view)) => match view.last_save {
                         Some(save) if view.is_dirty() => {
@@ -207,7 +211,49 @@ impl App {
             let path = slot.entry.path.clone();
             match self.backend.load(&path) {
                 Ok(input) => {
-                    self.files[index].view = Some(FileView::new(MergeSession::new(input)));
+                    let language = self
+                        .config
+                        .ui
+                        .syntax
+                        .then(|| Language::from_path(&path))
+                        .flatten();
+                    // Pick up where the last save left off — but only if
+                    // that save still describes reality: the progress must
+                    // belong to these inputs, and the file on disk must be
+                    // exactly what it produced.
+                    let saved = self
+                        .backend
+                        .load_progress(&path)
+                        .and_then(|text| Snapshot::from_toml(&text));
+                    let mut session = MergeSession::new(input.clone());
+                    let resumed = saved.as_ref().is_some_and(|snapshot| {
+                        session.restore(snapshot)
+                            && self.backend.current_content(&path).as_deref()
+                                == Some(session.output().text.as_str())
+                    });
+                    if !resumed {
+                        session = MergeSession::new(input);
+                    }
+                    let mut view = FileView::with_language(session, language);
+                    if resumed {
+                        if let Some(hunk) = saved.and_then(|snapshot| snapshot.cursor_hunk()) {
+                            view.goto_hunk(hunk);
+                        }
+                        let unresolved = view.session.stats().open;
+                        view.last_save = Some(SaveInfo {
+                            unresolved,
+                            staged: self.files[index].entry.resolved,
+                        });
+                        let left = match unresolved {
+                            0 => "every hunk is resolved".to_owned(),
+                            n => format!("{n} unresolved hunk{} left", plural(n)),
+                        };
+                        self.notify(
+                            Level::Info,
+                            format!("Resumed {path} from your last save · {left}"),
+                        );
+                    }
+                    self.files[index].view = Some(view);
                 }
                 Err(err) => {
                     self.notify(Level::Error, format!("{path}: {err}"));
@@ -744,8 +790,21 @@ impl App {
         let path = slot.entry.path.clone();
         let output = view.session.output();
         let revision = view.session.revision();
+        let progress = view
+            .session
+            .snapshot()
+            .with_cursor(view.position().0)
+            .to_toml();
         let resolved = output.unresolved == 0;
-        match self.backend.save(&path, &output.text, resolved) {
+        let saved = self
+            .backend
+            .save(&path, &output.text, resolved)
+            .and_then(|outcome| {
+                // Remember every decision, so the next run resumes here.
+                self.backend.save_progress(&path, &progress)?;
+                Ok(outcome)
+            });
+        match saved {
             Ok(outcome) => {
                 if let Some(view) = self.files[index].view.as_mut() {
                     view.saved_revision = revision;

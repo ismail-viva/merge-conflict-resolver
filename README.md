@@ -3,7 +3,7 @@
 A keyboard-first, three-pane Git merge TUI written in Rust. The incoming
 branch is on the left, your branch on the right, and the merged result in the
 middle. Resolve conflicts hunk by hunk or line by line, mix lines from both
-sides, and undo anything.
+sides, and undo anything — with editor-grade syntax highlighting throughout.
 
 ![mcr resolving a merge: source branch, merged result and target branch side by side](docs/screenshot.png)
 
@@ -43,19 +43,74 @@ As a `git mergetool`:
 3. `w` writes the file. Once nothing is unresolved it is also `git add`ed.
 4. `] f` moves to the next file; `q` quits. Finish with `git commit`.
 
+### Saving and Resuming
+
+`w` writes the file and remembers every decision you made in it. Quit
+whenever you like: the next `mcr` in the same merge picks up where you
+saved — accepted and rejected lines, their order, hand edits and the cursor
+position. Files you already finished stay in the tab row with a `✓`, so you
+can review or change them until you commit.
+
+Progress is kept under `.git/mcr-session/` and removed once the merge is
+over. It is only resumed while it still describes reality: if the file on
+disk is no longer what `mcr` saved (you edited it elsewhere, or restarted the
+merge), that file starts fresh. The undo history is not carried across runs.
+
 ## Look
 
-The default theme is **Tokyo Night**; `tokyonight-storm`, `tokyonight-day`
-(light) and the Material `dark` / `light` themes are built in, and `ctrl-t`
-cycles through them. The panes have no borders: each has a header strip,
-underlined in its color while it has the focus. Only the current line is set
-apart, with its own background, across all three panes.
+The panes have no borders: each has a header strip, underlined in its color
+while it has the focus. Only the current line is set apart, with its own
+background, across all three panes.
 
 Icons come from a [Nerd Font](https://www.nerdfonts.com) (any patched font,
 e.g. JetBrainsMono Nerd Font). The typeface itself is your terminal's — a
 terminal program cannot choose it. Without a Nerd Font set
 `ui.icons = "unicode"` (plain symbols, shown in the tables below) or
 `"ascii"`.
+
+### Syntax Highlighting
+
+Code is parsed with [tree-sitter](https://tree-sitter.github.io) grammars and
+colored the way nvim-treesitter does it: keywords, functions, types,
+components, properties, parameters, strings, numbers, operators, comments
+and more each get their own color from the theme. Highlighting stays on over
+diff and conflict backgrounds; rejected lines are dimmed and struck through
+instead.
+
+Supported: Python, Rust, JavaScript / JSX, TypeScript / TSX, Go, JSON, TOML,
+YAML, Markdown, Bash, HTML and CSS, recognized by file name. Other files —
+and files over 1 MB per side — are shown plain. `ui.syntax = false` turns
+highlighting off, `ui.italic = false` the italics of comments and
+control-flow keywords.
+
+### Themes
+
+A theme colors the whole interface *and* the code. Built in:
+
+| Theme | |
+| --- | --- |
+| `tokyonight` | Tokyo Night — the default |
+| `tokyonight-storm` | the same on a slate background |
+| `tokyonight-day` | the light variant |
+| `dark`, `light` | Material |
+
+Choose one with `ui.theme` or `--theme`, and switch while running with
+`ctrl-t`. `theme = "auto"` picks `tokyonight`, or `tokyonight-day` on a light
+terminal.
+
+**Adding a theme.** Drop a file into `themes/` next to your config file; its
+name is the theme's name:
+
+```sh
+mkdir -p ~/.config/mcr/themes
+cp themes/catppuccin-mocha.toml ~/.config/mcr/themes/
+mcr --theme catppuccin-mocha
+```
+
+[`themes/catppuccin-mocha.toml`](themes/catppuccin-mocha.toml) is a complete,
+commented theme to copy from. Every key is optional — what a theme leaves out
+comes from its `base` — so adjusting a built-in theme takes a few lines. The
+same keys also work inline in `config.toml` (see [Configuration](#configuration)).
 
 ## Reading the Screen
 
@@ -134,7 +189,7 @@ whatever is still pending.
   resolved, `git update-index --unresolve` if you later reopen it. mcr never
   commits.
 * **Nothing is written until you save**, and quitting with unsaved work asks
-  first.
+  first. Saved work is resumed on the next run, never silently replaced.
 * The working-tree file as it was before the first save is kept under
   `.git/mcr-backup/`.
 * Files are written byte-exact: CRLF stays CRLF, a missing final newline
@@ -172,15 +227,25 @@ bg = "#0f111a"
 accent = "#84ffff"
 conflict = "#ff5370"
 tint = 0.22                 # opacity of diff / conflict backgrounds
+
+[themes.midnight.syntax]    # colors of the code
+keyword = "#c792ea"
+string = "#c3e88d"
+comment = "#546e7a"
 ```
 
 Keys are written as typed — `j`, `G`, `space`, `enter`, `ctrl-d`, `alt-x`,
 `shift-tab`, `f5` — or in Vim notation (`<c-d>`, `<space>`). Binding a key
 to an action takes it away from the default action that used it.
 
-Theme colors: `bg` `surface` `fg` `muted` `gutter` `cursor` `border` `accent` `source`
-`target` `added` `removed` `modified` `conflict` `accepted` `rejected`
-`unresolved`. Themes switch at runtime with `ctrl-t`.
+Interface colors: `bg` `surface` `fg` `muted` `gutter` `cursor` `border`
+`accent` `source` `target` `added` `removed` `modified` `conflict` `accepted`
+`rejected` `unresolved`.
+
+Syntax colors: `keyword` `keyword_control` `function` `function_builtin`
+`type` `type_builtin` `constant` `string` `escape` `comment` `property`
+`parameter` `variable` `variable_builtin` `operator` `punctuation` `tag`
+`attribute`.
 
 Terminals have no alpha channel, so the "translucent" backgrounds are the
 accent color blended into the background at `tint` opacity. Without 24-bit
@@ -198,6 +263,7 @@ src/
   git/       where inputs come from and results go: the MergeBackend trait,
              implemented for a repository (via the git CLI) and for plain files;
              blame parsing (not shown in the interface at present)
+  syntax.rs  tree-sitter highlighting into theme-independent tokens
   config/    config file, keymap (multi-key sequences), themes
   action.rs  the commands a key can trigger
   app/       application state: events in, state changes and effects out
@@ -223,7 +289,10 @@ with key events against an in-memory terminal.
 
 ## Limitations
 
-* Line-based: no syntax highlighting and no word-level diff inside a line.
+* Line-based: no word-level diff inside a line.
+* Highlighting is syntactic (tree-sitter), not semantic: there is no language
+  server, so a name's color depends on its position in the code, not its type.
+* The grammars are compiled in, which makes the binary about 11 MB.
 * Free-form editing happens in `$EDITOR`, one hunk at a time.
 * `theme = "auto"` relies on `$COLORFGBG`; without it, dark is assumed.
 * The default icons need a Nerd Font; see `ui.icons`.

@@ -634,3 +634,279 @@ fn the_current_file_tab_stays_visible_and_hints_never_get_cut() {
         }
     }
 }
+
+/// A repository whose conflicted file is Python source.
+fn python_repo() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write(
+        "calc.py",
+        "def total(items):\n    return 0\n\n\nLIMIT = 10\n",
+    );
+    repo.commit_all("base", "Ada Base");
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.write(
+        "calc.py",
+        "def total(items):\n    return sum(items)  # theirs\n\n\nLIMIT = 10\n",
+    );
+    repo.commit_all("feature", "Grace Feature");
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "calc.py",
+        "def total(items):\n    return len(items)\n\n\nLIMIT = 10\n",
+    );
+    repo.commit_all("main", "Linus Main");
+    assert!(!repo.try_git(&["merge", "feature"]).0);
+    repo
+}
+
+/// Foreground color of the first cell showing `needle` in a pane's row.
+fn fg_of(app: &mut App, pane: Pane, row: u16, needle: &str) -> Option<Color> {
+    let terminal = render(app, 140, 30);
+    let buffer = terminal.backend().buffer();
+    let area = app.geometry.panes[pane.index()];
+    let cells: Vec<_> = (area.x..area.right())
+        .map(|x| &buffer[(x, area.y + row)])
+        .collect();
+    let text: String = cells.iter().map(|c| c.symbol()).collect();
+    let byte = text.find(needle)?;
+    Some(cells[text[..byte].chars().count()].fg)
+}
+
+#[test]
+fn code_is_highlighted_with_the_theme_and_follows_theme_switches() {
+    let repo = python_repo();
+    let mut app = app_with(&repo, Config::default());
+    let rgb = |c: Rgb| Some(Color::Rgb(c.0, c.1, c.2));
+    let night = Theme::tokyonight();
+
+    // Unchanged line `def total(items):` in every pane.
+    for pane in Pane::ALL {
+        assert_eq!(
+            fg_of(&mut app, pane, 0, "def"),
+            rgb(night.syntax.keyword),
+            "{pane:?}"
+        );
+        assert_eq!(
+            fg_of(&mut app, pane, 0, "total"),
+            rgb(night.syntax.function)
+        );
+        assert_eq!(
+            fg_of(&mut app, pane, 0, "items"),
+            rgb(night.syntax.parameter)
+        );
+    }
+    // Conflicting lines keep their syntax colors on the tinted background.
+    assert_eq!(
+        fg_of(&mut app, Pane::Source, 1, "return"),
+        rgb(night.syntax.keyword_control)
+    );
+    assert_eq!(
+        fg_of(&mut app, Pane::Source, 1, "sum"),
+        rgb(night.syntax.function_builtin)
+    );
+    assert_eq!(
+        fg_of(&mut app, Pane::Target, 1, "len"),
+        rgb(night.syntax.function_builtin)
+    );
+    assert_eq!(
+        fg_of(&mut app, Pane::Source, 4, "10"),
+        rgb(night.syntax.constant)
+    );
+
+    // Taking the source: the result line is colored like its origin, and
+    // the rejected target line loses its colors.
+    press(&mut app, "s");
+    assert_eq!(
+        fg_of(&mut app, Pane::Result, 1, "sum"),
+        rgb(night.syntax.function_builtin)
+    );
+    assert_eq!(fg_of(&mut app, Pane::Target, 1, "return"), rgb(night.muted));
+
+    // Switching the theme recolors the code along with the interface.
+    press(&mut app, "ctrl-t ctrl-t");
+    let day = Theme::tokyonight_day();
+    assert_eq!(app.theme().name, "tokyonight-day");
+    assert_eq!(
+        fg_of(&mut app, Pane::Result, 0, "def"),
+        rgb(day.syntax.keyword)
+    );
+    assert_eq!(
+        fg_of(&mut app, Pane::Result, 1, "sum"),
+        rgb(day.syntax.function_builtin)
+    );
+}
+
+#[test]
+fn hand_edited_hunks_are_highlighted_too() {
+    let repo = python_repo();
+    let mut app = app_with(&repo, Config::default());
+    let night = Theme::tokyonight();
+    let Effect::Edit(request) = press(&mut app, "e") else {
+        panic!("expected an edit request")
+    };
+    app.finish_edit(&request, Ok("    return max(items)\n".to_owned()));
+    let rgb = |c: Rgb| Some(Color::Rgb(c.0, c.1, c.2));
+    assert_eq!(
+        fg_of(&mut app, Pane::Result, 1, "return"),
+        rgb(night.syntax.keyword_control)
+    );
+    assert_eq!(
+        fg_of(&mut app, Pane::Result, 1, "max"),
+        rgb(night.syntax.function_builtin)
+    );
+    press(&mut app, "u");
+    assert_eq!(fg_of(&mut app, Pane::Result, 1, "max"), None);
+}
+
+#[test]
+fn highlighting_can_be_turned_off_and_unknown_files_stay_plain() {
+    let repo = python_repo();
+    let config = Config::from_toml("[ui]\nsyntax = false").unwrap();
+    let mut app = app_with(&repo, config);
+    let night = Theme::tokyonight();
+    let plain = Some(Color::Rgb(night.fg.0, night.fg.1, night.fg.2));
+    assert_eq!(fg_of(&mut app, Pane::Result, 0, "def"), plain);
+
+    let repo = TestRepo::conflicted();
+    let mut app = app_with(&repo, Config::default());
+    assert_eq!(
+        fg_of(&mut app, Pane::Result, 1, "one"),
+        plain,
+        "file.txt has no grammar"
+    );
+}
+
+#[test]
+fn saved_progress_is_resumed_after_quitting() {
+    let repo = TestRepo::conflicted();
+    {
+        let mut app = app(&repo);
+        // Partly resolve file.txt line by line, then save and quit.
+        press(&mut app, "h j space l l k x w");
+        assert_eq!(status(&app), HunkStatus::Partial);
+        assert_eq!(press(&mut app, "q"), Effect::Quit);
+    }
+
+    let mut app = app(&repo);
+    assert_eq!(app.current_path(), "file.txt");
+    assert!(
+        message(&app)
+            .0
+            .starts_with("Resumed file.txt from your last save"),
+        "{:?}",
+        app.message
+    );
+    assert_eq!(
+        status(&app),
+        HunkStatus::Partial,
+        "the line decisions are back"
+    );
+    let view = app.view().unwrap();
+    let hunk = view.position().0;
+    let state = |side, index| {
+        view.session
+            .line_state(hunk, mcr::core::LineRef { side, index })
+    };
+    assert_eq!(state(Side::Source, 0), Some(LineState::Unresolved));
+    assert_eq!(state(Side::Source, 1), Some(LineState::Accepted));
+    assert_eq!(state(Side::Target, 0), Some(LineState::Rejected));
+    assert!(!view.is_dirty(), "what was restored is what is on disk");
+    assert_eq!(press(&mut app, "q"), Effect::Quit, "nothing to confirm");
+}
+
+#[test]
+fn resolved_files_and_manual_edits_are_resumed_too() {
+    let repo = TestRepo::conflicted();
+    {
+        let mut app = app(&repo);
+        let Effect::Edit(request) = press(&mut app, "e") else {
+            panic!("expected an edit request")
+        };
+        app.finish_edit(&request, Ok("two, merged by hand\n".to_owned()));
+        press(&mut app, "w");
+        assert_eq!(repo.unmerged(), ["other.txt"]);
+    }
+
+    let mut app = app(&repo);
+    // The file that still needs work comes first; the finished one is listed.
+    assert_eq!(app.current_path(), "other.txt");
+    let text = screen(&mut app);
+    assert!(text.contains("file.txt ✓"), "{text}");
+    assert!(!app.all_resolved());
+
+    press(&mut app, "[ f");
+    assert_eq!(app.current_path(), "file.txt");
+    assert_eq!(status(&app), HunkStatus::Modified);
+    assert!(result(&app).contains("one\ntwo, merged by hand\nthree\n"));
+    assert!(screen(&mut app).contains("saved · staged"));
+
+    // Finishing the other file completes the merge without reopening this one.
+    press(&mut app, "] f s w");
+    assert!(app.all_resolved());
+    drop(app);
+    let mut app = self::app(&repo);
+    assert!(app.all_resolved(), "both files are known to be resolved");
+    assert!(screen(&mut app).contains("3/3 hunks") || screen(&mut app).contains("1/1 hunks"));
+
+    // Changing a resolved file's mind hands the conflict back to git.
+    press(&mut app, "r w");
+    assert_eq!(repo.unmerged().len(), 1);
+}
+
+#[test]
+fn progress_saved_for_other_inputs_is_ignored() {
+    let repo = TestRepo::conflicted();
+    {
+        let mut app = app(&repo);
+        press(&mut app, "s w");
+    }
+    // Start the merge over. The inputs are the same, but git rewrote the
+    // file with fresh conflict markers…
+    repo.git(&["merge", "--abort"]);
+    assert!(!repo.try_git(&["merge", "feature"]).0);
+    let app1 = app(&repo);
+    assert_eq!(
+        status(&app1),
+        HunkStatus::Unresolved,
+        "the file on disk is not what was saved, so nothing is resumed"
+    );
+    drop(app1);
+
+    // …and progress written for different content never applies.
+    let git = GitBackend::discover(repo.path(), GitOptions::default()).unwrap();
+    let mut other = mcr::core::MergeSession::new(mcr::core::MergeInput {
+        base: "a\n".into(),
+        source: "b\n".into(),
+        target: "c\n".into(),
+        ..Default::default()
+    });
+    other
+        .apply(mcr::core::Op::TakeSide {
+            hunk: 0,
+            side: Side::Source,
+        })
+        .unwrap();
+    use mcr::git::MergeBackend;
+    git.save_progress("file.txt", &other.snapshot().to_toml())
+        .unwrap();
+    let app2 = app(&repo);
+    assert_eq!(status(&app2), HunkStatus::Unresolved);
+    assert!(app2.message.is_none());
+}
+
+#[test]
+fn a_file_changed_outside_mcr_since_the_save_is_not_resumed() {
+    let repo = TestRepo::conflicted();
+    {
+        let mut app = app(&repo);
+        press(&mut app, "s w");
+    }
+    // Edited by hand afterwards: the saved progress no longer describes it.
+    repo.write("file.txt", "something else entirely\n");
+    repo.git(&["update-index", "--unresolve", "--", "file.txt"]);
+    let app = app(&repo);
+    assert_eq!(app.current_path(), "file.txt");
+    assert_eq!(status(&app), HunkStatus::Unresolved);
+    assert!(app.view().unwrap().last_save.is_none());
+    assert!(app.message.is_none());
+}

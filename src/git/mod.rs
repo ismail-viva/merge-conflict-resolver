@@ -23,6 +23,9 @@ pub struct ConflictEntry {
     pub path: String,
     /// Set when the conflict cannot be resolved line by line.
     pub unsupported: Option<String>,
+    /// Already resolved and staged in an earlier run; listed so the work
+    /// can be reviewed or continued.
+    pub resolved: bool,
 }
 
 /// What is being merged into what.
@@ -69,6 +72,22 @@ pub trait MergeBackend: Send + Sync {
     /// Write a merge result. `resolved` tells whether `content` is free of
     /// conflict markers; only then may the path be marked as resolved.
     fn save(&self, path: &str, content: &str, resolved: bool) -> GitResult<SaveOutcome>;
+
+    /// What is currently on disk for `path`, if it is readable text.
+    fn current_content(&self, _path: &str) -> Option<String> {
+        None
+    }
+
+    /// The progress saved for `path` by [`MergeBackend::save_progress`],
+    /// if any. Backends without a place to keep it have none.
+    fn load_progress(&self, _path: &str) -> Option<String> {
+        None
+    }
+
+    /// Remember the resolution state of `path` so a later run can resume.
+    fn save_progress(&self, _path: &str, _progress: &str) -> GitResult<()> {
+        Ok(())
+    }
 
     /// Per-line history of one side, or `None` when there is none to show.
     fn blame(&self, path: &str, side: Side) -> GitResult<Option<Blame>>;

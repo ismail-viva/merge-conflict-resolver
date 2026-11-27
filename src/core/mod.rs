@@ -9,5 +9,5 @@ pub mod text;
 pub use diff3::{Hunk, HunkKind};
 pub use session::{
     Applied, HunkStatus, Labels, LineRef, LineState, MergeInput, MergeOutput, MergeSession, Op,
-    OpError, Origin, ResultLine, Side, Stats,
+    OpError, Origin, ResultLine, Side, Snapshot, Stats,
 };
