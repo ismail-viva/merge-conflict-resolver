@@ -15,6 +15,9 @@ panel_ratio = [1, 1, 1]
 # Height share of the result pane in the stacked layout.
 stacked_result_percent = 45
 line_numbers = true
+# Syntax highlighting, and italics for comments and control-flow keywords.
+syntax = true
+italic = true
 # Overview column marking where changes and open conflicts are.
 minimap = false
 mouse = true
@@ -94,7 +97,8 @@ quit                   = ["q", "ctrl-c"]  # Quit
 
 # Themes: override colors of a built-in theme, or define your own.
 # `base` is any built-in theme (default "tokyonight"); `tint` is the opacity (0–1) of
-# diff and conflict backgrounds. Colors are "#rrggbb".
+# diff and conflict backgrounds. Colors are "#rrggbb". The `syntax` table
+# colors source code.
 #
 # [themes.midnight]
 # base = "tokyonight"
@@ -116,3 +120,26 @@ quit                   = ["q", "ctrl-c"]  # Quit
 # accepted   = "#9ece6a"
 # rejected   = "#f7768e"
 # unresolved = "#e0af68"
+#
+# [themes.midnight.syntax]
+# keyword          = "#bb9af7"
+# keyword_control  = "#9d7cd8"
+# function         = "#7aa2f7"
+# function_builtin = "#2ac3de"
+# type             = "#2ac3de"
+# type_builtin     = "#27a1b9"
+# constant         = "#ff9e64"
+# string           = "#9ece6a"
+# escape           = "#bb9af7"
+# comment          = "#565f89"
+# property         = "#73daca"
+# parameter        = "#e0af68"
+# variable         = "#c0caf5"
+# variable_builtin = "#f7768e"
+# operator         = "#89ddff"
+# punctuation      = "#a9b1d6"
+# tag              = "#f7768e"
+# attribute        = "#7dcfff"
+#
+# A theme can also live in its own file: themes/<name>.toml next to this
+# file, holding the same keys without the [themes.<name>] header.

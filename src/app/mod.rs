@@ -17,6 +17,7 @@ use crate::config::{ColorDepth, Config, Key, LayoutMode, Lookup, Theme};
 use crate::core::text::split_lines;
 use crate::core::{LineRef, MergeSession, Op, OpError, Origin, Side};
 use crate::git::{ConflictEntry, MergeContext, SharedBackend};
+use crate::syntax::Language;
 
 pub use view::{FileView, Pane, RowLayout, SaveInfo};
 
@@ -207,7 +208,14 @@ impl App {
             let path = slot.entry.path.clone();
             match self.backend.load(&path) {
                 Ok(input) => {
-                    self.files[index].view = Some(FileView::new(MergeSession::new(input)));
+                    let language = self
+                        .config
+                        .ui
+                        .syntax
+                        .then(|| Language::from_path(&path))
+                        .flatten();
+                    self.files[index].view =
+                        Some(FileView::with_language(MergeSession::new(input), language));
                 }
                 Err(err) => {
                     self.notify(Level::Error, format!("{path}: {err}"));

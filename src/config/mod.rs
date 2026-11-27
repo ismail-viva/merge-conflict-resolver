@@ -49,6 +49,10 @@ pub struct UiConfig {
     /// Share of the height given to the result pane in the stacked layout.
     pub stacked_result_percent: u16,
     pub line_numbers: bool,
+    /// Color source code by its syntax.
+    pub syntax: bool,
+    /// Set comments and control-flow keywords in italics.
+    pub italic: bool,
     pub minimap: bool,
     pub mouse: bool,
     /// Glyphs for markers and decorations.
@@ -69,6 +73,8 @@ impl Default for UiConfig {
             panel_ratio: [1, 1, 1],
             stacked_result_percent: 45,
             line_numbers: true,
+            syntax: true,
+            italic: true,
             minimap: false,
             mouse: true,
             icons: IconSet::Nerd,
@@ -130,7 +136,18 @@ impl Default for Config {
 
 impl Config {
     pub fn from_toml(text: &str) -> Result<Config> {
+        Self::from_toml_with_themes(text, BTreeMap::new())
+    }
+
+    /// Like [`Config::from_toml`], with themes defined outside the file.
+    /// A `[themes.<name>]` table in the file wins over a theme file of the
+    /// same name.
+    pub fn from_toml_with_themes(
+        text: &str,
+        mut theme_files: BTreeMap<String, ThemeOverride>,
+    ) -> Result<Config> {
         let raw: RawConfig = toml::from_str(text)?;
+        theme_files.extend(raw.themes);
         let keys: BTreeMap<String, Vec<String>> = raw
             .keys
             .into_iter()
@@ -143,7 +160,7 @@ impl Config {
             })
             .collect();
         let keymap = Keymap::with_overrides(&keys).context("in [keys]")?;
-        let themes = theme::build_themes(&raw.themes).context("in [themes]")?;
+        let themes = theme::build_themes(&theme_files).context("in themes")?;
 
         let ui = raw.ui;
         if ui.panel_ratio.contains(&0) {
@@ -163,18 +180,22 @@ impl Config {
         })
     }
 
-    /// Load `explicit`, or the default configuration file if it exists.
+    /// Load `explicit`, or the default configuration file if it exists,
+    /// together with the theme files in the `themes/` directory next to it.
     pub fn load(explicit: Option<&Path>) -> Result<Config> {
-        let path = match explicit {
-            Some(path) => path.to_owned(),
-            None => match default_path() {
-                Some(path) if path.is_file() => path,
-                _ => return Ok(Config::default()),
-            },
+        let path = explicit.map(Path::to_owned).or_else(default_path);
+        let themes = match path.as_deref().and_then(Path::parent) {
+            Some(dir) => load_theme_files(&dir.join("themes"))?,
+            None => BTreeMap::new(),
         };
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("cannot read config file {}", path.display()))?;
-        Config::from_toml(&text).with_context(|| format!("invalid config file {}", path.display()))
+        let text = match &path {
+            Some(path) if explicit.is_some() || path.is_file() => std::fs::read_to_string(path)
+                .with_context(|| format!("cannot read config file {}", path.display()))?,
+            _ => String::new(),
+        };
+        let shown = path.map(|p| p.display().to_string()).unwrap_or_default();
+        Config::from_toml_with_themes(&text, themes)
+            .with_context(|| format!("invalid configuration ({shown})"))
     }
 
     /// Index into [`Config::themes`] of the theme to start with.
@@ -202,6 +223,29 @@ impl Config {
             ),
         }
     }
+}
+
+/// Read every `<name>.toml` in `dir` as the theme `<name>`. Each file holds
+/// what a `[themes.<name>]` table would. A missing directory is fine.
+pub fn load_theme_files(dir: &Path) -> Result<BTreeMap<String, ThemeOverride>> {
+    let mut themes = BTreeMap::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(themes);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_stem().and_then(|stem| stem.to_str());
+        let is_toml = path.extension().is_some_and(|ext| ext == "toml");
+        let (Some(name), true) = (name, is_toml && path.is_file()) else {
+            continue;
+        };
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("cannot read theme file {}", path.display()))?;
+        let theme: ThemeOverride = toml::from_str(&text)
+            .with_context(|| format!("invalid theme file {}", path.display()))?;
+        themes.insert(name.to_owned(), theme);
+    }
+    Ok(themes)
 }
 
 /// `$MCR_CONFIG`, else `$XDG_CONFIG_HOME/mcr/config.toml`, else
@@ -244,6 +288,9 @@ panel_ratio = [{r0}, {r1}, {r2}]
 # Height share of the result pane in the stacked layout.
 stacked_result_percent = {stacked}
 line_numbers = {line_numbers}
+# Syntax highlighting, and italics for comments and control-flow keywords.
+syntax = {syntax}
+italic = {italic}
 # Overview column marking where changes and open conflicts are.
 minimap = {minimap}
 mouse = {mouse}
@@ -271,6 +318,8 @@ backup = {backup}
         r2 = ui.panel_ratio[2],
         stacked = ui.stacked_result_percent,
         line_numbers = ui.line_numbers,
+        syntax = ui.syntax,
+        italic = ui.italic,
         minimap = ui.minimap,
         mouse = ui.mouse,
         tab_width = ui.tab_width,
@@ -304,7 +353,8 @@ backup = {backup}
         r##"
 # Themes: override colors of a built-in theme, or define your own.
 # `base` is any built-in theme (default "tokyonight"); `tint` is the opacity (0–1) of
-# diff and conflict backgrounds. Colors are "#rrggbb".
+# diff and conflict backgrounds. Colors are "#rrggbb". The `syntax` table
+# colors source code.
 #
 # [themes.midnight]
 # base = "tokyonight"
@@ -317,6 +367,18 @@ backup = {backup}
             out.push_str(&format!("# {role:<10} = \"#{r:02x}{g:02x}{b:02x}\"\n"));
         }
     }
+    out.push_str("#\n# [themes.midnight.syntax]\n");
+    for token in crate::syntax::Token::ALL {
+        let Rgb(r, g, b) = dark.syntax.color(*token);
+        out.push_str(&format!(
+            "# {:<16} = \"#{r:02x}{g:02x}{b:02x}\"\n",
+            token.name()
+        ));
+    }
+    out.push_str(
+        "#\n# A theme can also live in its own file: themes/<name>.toml next to this\n\
+         # file, holding the same keys without the [themes.<name>] header.\n",
+    );
     out
 }
 
@@ -397,5 +459,68 @@ mod tests {
             let err = format!("{:#}", Config::from_toml(toml).unwrap_err());
             assert!(err.contains(needle), "`{toml}` gave: {err}");
         }
+    }
+
+    #[test]
+    fn theme_files_are_loaded_next_to_the_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::create_dir(dir.path().join("themes")).unwrap();
+        std::fs::write(
+            dir.path().join("themes/ocean.toml"),
+            "base = \"tokyonight-day\"\naccent = \"#006064\"\n[syntax]\nkeyword = \"#aa00ff\"\ntype = \"#004d40\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("themes/notes.txt"), "not a theme").unwrap();
+
+        // Theme files work without any config file…
+        let config = Config::load(Some(&config_path)).err();
+        assert!(
+            config.is_some(),
+            "an explicitly named config file must exist"
+        );
+        std::fs::write(&config_path, "[ui]\ntheme = \"ocean\"\n").unwrap();
+        let config = Config::load(Some(&config_path)).unwrap();
+        let ocean = &config.themes[config.initial_theme(None).unwrap()];
+        assert_eq!(ocean.name, "ocean");
+        assert_eq!(ocean.accent, Rgb(0, 0x60, 0x64));
+        assert_eq!(ocean.bg, Theme::tokyonight_day().bg);
+        assert_eq!(ocean.syntax.keyword, Rgb(0xaa, 0, 0xff));
+        assert_eq!(ocean.syntax.type_, Rgb(0, 0x4d, 0x40));
+        assert_eq!(ocean.syntax.string, Theme::tokyonight_day().syntax.string);
+
+        // …and a table in the config file wins over a file of the same name.
+        std::fs::write(&config_path, "[themes.ocean]\naccent = \"#ff0000\"\n").unwrap();
+        let config = Config::load(Some(&config_path)).unwrap();
+        let ocean = config.themes.iter().find(|t| t.name == "ocean").unwrap();
+        assert_eq!(ocean.accent, Rgb(0xff, 0, 0));
+
+        std::fs::write(dir.path().join("themes/bad.toml"), "accent = \"red\"").unwrap();
+        let err = format!("{:#}", Config::load(Some(&config_path)).unwrap_err());
+        assert!(err.contains("invalid color"), "{err}");
+    }
+
+    #[test]
+    fn the_example_theme_file_sets_every_color() {
+        let text = include_str!("../../themes/catppuccin-mocha.toml");
+        let over: ThemeOverride = toml::from_str(text).unwrap();
+        let value: toml::Table = toml::from_str(text).unwrap();
+        for role in Theme::ROLES {
+            assert!(
+                value.contains_key(*role),
+                "the template is missing `{role}`"
+            );
+        }
+        let syntax = value["syntax"].as_table().unwrap();
+        for role in theme::SyntaxTheme::ROLES {
+            assert!(
+                syntax.contains_key(*role),
+                "the template is missing syntax `{role}`"
+            );
+        }
+        let themes = theme::build_themes(&BTreeMap::from([("mocha".to_owned(), over)])).unwrap();
+        let mocha = themes.last().unwrap();
+        assert_eq!(mocha.bg, Rgb(0x1e, 0x1e, 0x2e));
+        assert_eq!(mocha.syntax.string, Rgb(0xa6, 0xe3, 0xa1));
     }
 }

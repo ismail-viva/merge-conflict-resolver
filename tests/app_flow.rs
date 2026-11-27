@@ -634,3 +634,144 @@ fn the_current_file_tab_stays_visible_and_hints_never_get_cut() {
         }
     }
 }
+
+/// A repository whose conflicted file is Python source.
+fn python_repo() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write(
+        "calc.py",
+        "def total(items):\n    return 0\n\n\nLIMIT = 10\n",
+    );
+    repo.commit_all("base", "Ada Base");
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.write(
+        "calc.py",
+        "def total(items):\n    return sum(items)  # theirs\n\n\nLIMIT = 10\n",
+    );
+    repo.commit_all("feature", "Grace Feature");
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "calc.py",
+        "def total(items):\n    return len(items)\n\n\nLIMIT = 10\n",
+    );
+    repo.commit_all("main", "Linus Main");
+    assert!(!repo.try_git(&["merge", "feature"]).0);
+    repo
+}
+
+/// Foreground color of the first cell showing `needle` in a pane's row.
+fn fg_of(app: &mut App, pane: Pane, row: u16, needle: &str) -> Option<Color> {
+    let terminal = render(app, 140, 30);
+    let buffer = terminal.backend().buffer();
+    let area = app.geometry.panes[pane.index()];
+    let cells: Vec<_> = (area.x..area.right())
+        .map(|x| &buffer[(x, area.y + row)])
+        .collect();
+    let text: String = cells.iter().map(|c| c.symbol()).collect();
+    let byte = text.find(needle)?;
+    Some(cells[text[..byte].chars().count()].fg)
+}
+
+#[test]
+fn code_is_highlighted_with_the_theme_and_follows_theme_switches() {
+    let repo = python_repo();
+    let mut app = app_with(&repo, Config::default());
+    let rgb = |c: Rgb| Some(Color::Rgb(c.0, c.1, c.2));
+    let night = Theme::tokyonight();
+
+    // Unchanged line `def total(items):` in every pane.
+    for pane in Pane::ALL {
+        assert_eq!(
+            fg_of(&mut app, pane, 0, "def"),
+            rgb(night.syntax.keyword),
+            "{pane:?}"
+        );
+        assert_eq!(
+            fg_of(&mut app, pane, 0, "total"),
+            rgb(night.syntax.function)
+        );
+        assert_eq!(
+            fg_of(&mut app, pane, 0, "items"),
+            rgb(night.syntax.parameter)
+        );
+    }
+    // Conflicting lines keep their syntax colors on the tinted background.
+    assert_eq!(
+        fg_of(&mut app, Pane::Source, 1, "return"),
+        rgb(night.syntax.keyword_control)
+    );
+    assert_eq!(
+        fg_of(&mut app, Pane::Source, 1, "sum"),
+        rgb(night.syntax.function_builtin)
+    );
+    assert_eq!(
+        fg_of(&mut app, Pane::Target, 1, "len"),
+        rgb(night.syntax.function_builtin)
+    );
+    assert_eq!(
+        fg_of(&mut app, Pane::Source, 4, "10"),
+        rgb(night.syntax.constant)
+    );
+
+    // Taking the source: the result line is colored like its origin, and
+    // the rejected target line loses its colors.
+    press(&mut app, "s");
+    assert_eq!(
+        fg_of(&mut app, Pane::Result, 1, "sum"),
+        rgb(night.syntax.function_builtin)
+    );
+    assert_eq!(fg_of(&mut app, Pane::Target, 1, "return"), rgb(night.muted));
+
+    // Switching the theme recolors the code along with the interface.
+    press(&mut app, "ctrl-t ctrl-t");
+    let day = Theme::tokyonight_day();
+    assert_eq!(app.theme().name, "tokyonight-day");
+    assert_eq!(
+        fg_of(&mut app, Pane::Result, 0, "def"),
+        rgb(day.syntax.keyword)
+    );
+    assert_eq!(
+        fg_of(&mut app, Pane::Result, 1, "sum"),
+        rgb(day.syntax.function_builtin)
+    );
+}
+
+#[test]
+fn hand_edited_hunks_are_highlighted_too() {
+    let repo = python_repo();
+    let mut app = app_with(&repo, Config::default());
+    let night = Theme::tokyonight();
+    let Effect::Edit(request) = press(&mut app, "e") else {
+        panic!("expected an edit request")
+    };
+    app.finish_edit(&request, Ok("    return max(items)\n".to_owned()));
+    let rgb = |c: Rgb| Some(Color::Rgb(c.0, c.1, c.2));
+    assert_eq!(
+        fg_of(&mut app, Pane::Result, 1, "return"),
+        rgb(night.syntax.keyword_control)
+    );
+    assert_eq!(
+        fg_of(&mut app, Pane::Result, 1, "max"),
+        rgb(night.syntax.function_builtin)
+    );
+    press(&mut app, "u");
+    assert_eq!(fg_of(&mut app, Pane::Result, 1, "max"), None);
+}
+
+#[test]
+fn highlighting_can_be_turned_off_and_unknown_files_stay_plain() {
+    let repo = python_repo();
+    let config = Config::from_toml("[ui]\nsyntax = false").unwrap();
+    let mut app = app_with(&repo, config);
+    let night = Theme::tokyonight();
+    let plain = Some(Color::Rgb(night.fg.0, night.fg.1, night.fg.2));
+    assert_eq!(fg_of(&mut app, Pane::Result, 0, "def"), plain);
+
+    let repo = TestRepo::conflicted();
+    let mut app = app_with(&repo, Config::default());
+    assert_eq!(
+        fg_of(&mut app, Pane::Result, 1, "one"),
+        plain,
+        "file.txt has no grammar"
+    );
+}

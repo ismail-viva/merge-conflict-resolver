@@ -15,6 +15,7 @@ use crate::app::{FileView, Pane};
 use crate::config::{Rgb, Theme};
 use crate::core::text::{has_eol, strip_eol};
 use crate::core::{Hunk, HunkKind, HunkStatus, LineRef, LineState, Origin, Side};
+use crate::syntax::{Span, Token};
 
 /// How one row of one pane looks.
 #[derive(Debug, Clone, PartialEq)]
@@ -188,23 +189,54 @@ pub fn describe<'a>(
 /// Make `text` displayable: expand tabs, neutralize control characters,
 /// then cut the window `[skip, skip + width)` out of it by display column.
 pub fn fit(text: &str, skip: usize, width: usize, tab_width: usize) -> String {
-    let mut out = String::new();
+    fit_tokens(text, &[], skip, width, tab_width)
+        .into_iter()
+        .map(|(piece, _)| piece)
+        .collect()
+}
+
+/// [`fit`], keeping track of which syntax token every piece belongs to.
+/// `spans` are byte ranges of `text`, in order.
+pub fn fit_tokens(
+    text: &str,
+    spans: &[Span],
+    skip: usize,
+    width: usize,
+    tab_width: usize,
+) -> Vec<(String, Option<Token>)> {
+    let mut out: Vec<(String, Option<Token>)> = Vec::new();
     let mut column = 0usize;
     let end = skip + width;
-    let mut push = |c: char, column: &mut usize| {
-        let w = c.width().unwrap_or(0);
-        if *column >= skip && *column + w <= end {
-            out.push(c);
-        } else if *column < end && *column + w > skip && w > 1 {
-            // A wide character cut by the window edge.
-            out.push(' ');
-        }
-        *column += w;
-    };
-    for c in text.chars() {
+    let mut next_span = 0usize;
+    for (byte, c) in text.char_indices() {
         if column >= end {
             break;
         }
+        while spans.get(next_span).is_some_and(|s| s.end as usize <= byte) {
+            next_span += 1;
+        }
+        let token = spans
+            .get(next_span)
+            .filter(|s| s.start as usize <= byte)
+            .map(|s| s.token);
+        let mut push = |c: char, column: &mut usize| {
+            let w = c.width().unwrap_or(0);
+            let shown = if *column >= skip && *column + w <= end {
+                Some(c)
+            } else if *column < end && *column + w > skip && w > 1 {
+                // A wide character cut by the window edge.
+                Some(' ')
+            } else {
+                None
+            };
+            if let Some(shown) = shown {
+                match out.last_mut() {
+                    Some((piece, last)) if *last == token => piece.push(shown),
+                    _ => out.push((shown.to_string(), token)),
+                }
+            }
+            *column += w;
+        };
         match c {
             '\t' => {
                 let stop = (column / tab_width + 1) * tab_width;
@@ -227,6 +259,8 @@ pub struct PaneWidget<'a> {
     pub symbols: &'a Symbols,
     pub line_numbers: bool,
     pub tab_width: usize,
+    /// Set comments and control-flow keywords in italics.
+    pub italic: bool,
 }
 
 impl PaneWidget<'_> {
@@ -335,8 +369,28 @@ impl Widget for PaneWidget<'_> {
                 if cell.strike {
                     style = style.add_modifier(Modifier::CROSSED_OUT);
                 }
-                let shown = fit(strip_eol(text), view.hscroll, width, self.tab_width);
-                put(buf, &mut x, &shown, style);
+                // Syntax colors apply to live text only: rejected and
+                // superseded lines stay uniformly dimmed.
+                let spans = if cell.strike || cell.fg != theme.fg {
+                    &[]
+                } else {
+                    view.syntax_at(self.pane, hunk, offset)
+                };
+                let line = strip_eol(text);
+                for (piece, token) in fit_tokens(line, spans, view.hscroll, width, self.tab_width) {
+                    let style = match token {
+                        Some(token) => {
+                            let colored = p.style(theme.syntax_color(token, tinted), bg);
+                            if self.italic && token.is_italic() {
+                                colored.add_modifier(Modifier::ITALIC)
+                            } else {
+                                colored
+                            }
+                        }
+                        None => style,
+                    };
+                    put(buf, &mut x, &piece, style);
+                }
                 if !has_eol(text) {
                     put(buf, &mut x, " ", p.style(theme.muted, bg));
                     put(buf, &mut x, self.symbols.no_eol, p.style(theme.muted, bg));

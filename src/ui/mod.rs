@@ -270,6 +270,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 symbols,
                 line_numbers: app.config.ui.line_numbers,
                 tab_width: app.config.ui.tab_width as usize,
+                italic: app.config.ui.italic,
             };
             frame.render_widget(widget, inner[pane.index()]);
         }

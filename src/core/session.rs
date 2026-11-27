@@ -332,6 +332,14 @@ impl MergeSession {
         &self.base[self.hunks[hunk].base.clone()]
     }
 
+    /// Every line of one side's file.
+    pub fn lines(&self, side: Side) -> &[String] {
+        match side {
+            Side::Source => &self.source,
+            Side::Target => &self.target,
+        }
+    }
+
     pub fn side_len(&self, side: Side) -> usize {
         match side {
             Side::Source => self.source.len(),

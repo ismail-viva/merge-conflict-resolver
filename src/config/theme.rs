@@ -8,6 +8,8 @@
 use ratatui::style::Color;
 use serde::Deserialize;
 
+use crate::syntax::Token;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
@@ -22,6 +24,11 @@ pub enum ThemeError {
 }
 
 impl Rgb {
+    /// From a `0xRRGGBB` literal.
+    pub const fn from_hex(hex: u32) -> Rgb {
+        Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
+    }
+
     pub fn parse(text: &str) -> Result<Rgb, ThemeError> {
         let invalid = || ThemeError::InvalidColor(text.to_owned());
         let hex = text.strip_prefix('#').ok_or_else(invalid)?;
@@ -119,6 +126,93 @@ impl ColorDepth {
     }
 }
 
+macro_rules! syntax_theme {
+    ($( $field:ident = $name:literal => $token:ident ),* $(,)?) => {
+        /// One color per [`Token`] kind.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct SyntaxTheme { $( pub $field: Rgb, )* }
+
+        /// A `[themes.<name>.syntax]` table: any subset of the syntax colors.
+        #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+        #[serde(default, deny_unknown_fields)]
+        pub struct SyntaxOverride {
+            $( #[serde(rename = $name)] pub $field: Option<String>, )*
+        }
+
+        impl SyntaxTheme {
+            /// Color names, as used in the configuration file.
+            pub const ROLES: &'static [&'static str] = &[ $( $name, )* ];
+
+            pub fn color(&self, token: Token) -> Rgb {
+                match token { $( Token::$token => self.$field, )* }
+            }
+
+            fn apply(&mut self, over: &SyntaxOverride) -> Result<(), ThemeError> {
+                $( if let Some(color) = &over.$field { self.$field = Rgb::parse(color)?; } )*
+                Ok(())
+            }
+
+            /// Build from `(name, hex)` pairs; every color must be given.
+            const fn from_hex(colors: [u32; Token::ALL.len()]) -> SyntaxTheme {
+                let mut index = 0;
+                $(
+                    let $field = Rgb::from_hex(colors[index]);
+                    index += 1;
+                )*
+                let _ = index;
+                SyntaxTheme { $( $field, )* }
+            }
+        }
+    };
+}
+
+// Field order is the order of the color lists in the built-in themes.
+syntax_theme! {
+    keyword = "keyword" => Keyword,
+    keyword_control = "keyword_control" => KeywordControl,
+    function = "function" => Function,
+    function_builtin = "function_builtin" => FunctionBuiltin,
+    type_ = "type" => Type,
+    type_builtin = "type_builtin" => TypeBuiltin,
+    constant = "constant" => Constant,
+    string = "string" => String,
+    escape = "escape" => Escape,
+    comment = "comment" => Comment,
+    property = "property" => Property,
+    parameter = "parameter" => Parameter,
+    variable = "variable" => Variable,
+    variable_builtin = "variable_builtin" => VariableBuiltin,
+    operator = "operator" => Operator,
+    punctuation = "punctuation" => Punctuation,
+    tag = "tag" => Tag,
+    attribute = "attribute" => Attribute,
+}
+
+impl SyntaxTheme {
+    /// Tokyo Night's treesitter palette.
+    pub const TOKYONIGHT: SyntaxTheme = SyntaxTheme::from_hex([
+        0xbb9af7, 0x9d7cd8, 0x7aa2f7, 0x2ac3de, 0x2ac3de, 0x27a1b9, 0xff9e64, 0x9ece6a, 0xbb9af7,
+        0x565f89, 0x73daca, 0xe0af68, 0xc0caf5, 0xf7768e, 0x89ddff, 0xa9b1d6, 0xf7768e, 0x7dcfff,
+    ]);
+
+    /// Tokyo Night Day, with its red deepened a little for legibility on
+    /// tinted rows.
+    pub const TOKYONIGHT_DAY: SyntaxTheme = SyntaxTheme::from_hex([
+        0x9854f1, 0x7847bd, 0x2e7de9, 0x188092, 0x188092, 0x0f6b7c, 0xb15c00, 0x587539, 0x9854f1,
+        0x848cb5, 0x387068, 0x8c6c3e, 0x3760bf, 0xd0245a, 0x006a83, 0x6172b0, 0xd0245a, 0x007197,
+    ]);
+
+    pub const MATERIAL_DARK: SyntaxTheme = SyntaxTheme::from_hex([
+        0xc792ea, 0xb39ddb, 0x82aaff, 0x80deea, 0xffcb6b, 0xffb74d, 0xf78c6c, 0xc3e88d, 0x89ddff,
+        0x757575, 0x80cbc4, 0xffab91, 0xe0e0e0, 0xf07178, 0x89ddff, 0xb0b0b0, 0xf07178, 0xffcb6b,
+    ]);
+
+    pub const MATERIAL_LIGHT: SyntaxTheme = SyntaxTheme::from_hex([
+        0x7b1fa2, 0x6a1b9a, 0x1565c0, 0x00838f, 0xb26a00, 0x9c5700, 0xd84315, 0x33691e, 0x00838f,
+        0x8a8a8a, 0x00695c, 0xad5a00, 0x212121, 0xc62828, 0x00838f, 0x616161, 0xc62828, 0xb26a00,
+    ]);
+}
+
 macro_rules! theme {
     ($( $(#[$doc:meta])* $field:ident ),* $(,)?) => {
         #[derive(Debug, Clone, PartialEq)]
@@ -127,6 +221,8 @@ macro_rules! theme {
             /// Opacity of diff / conflict backgrounds over `bg`.
             pub tint: f32,
             $( $(#[$doc])* pub $field: Rgb, )*
+            /// Colors of source code.
+            pub syntax: SyntaxTheme,
         }
 
         /// A `[themes.<name>]` table: any subset of a theme's colors.
@@ -137,6 +233,8 @@ macro_rules! theme {
             pub base: Option<String>,
             pub tint: Option<f32>,
             $( pub $field: Option<String>, )*
+            /// `[themes.<name>.syntax]`: colors of source code.
+            pub syntax: SyntaxOverride,
         }
 
         impl Theme {
@@ -148,7 +246,7 @@ macro_rules! theme {
                     self.tint = tint.clamp(0.0, 1.0);
                 }
                 $( if let Some(color) = &over.$field { self.$field = Rgb::parse(color)?; } )*
-                Ok(())
+                self.syntax.apply(&over.syntax)
             }
 
             pub fn role(&self, name: &str) -> Option<Rgb> {
@@ -227,6 +325,7 @@ impl Theme {
             accepted: Rgb(0x9e, 0xce, 0x6a),
             rejected: Rgb(0xf7, 0x76, 0x8e),
             unresolved: Rgb(0xe0, 0xaf, 0x68),
+            syntax: SyntaxTheme::TOKYONIGHT,
         }
     }
 
@@ -236,7 +335,7 @@ impl Theme {
             name: "tokyonight-storm".into(),
             bg: Rgb(0x24, 0x28, 0x3b),
             surface: Rgb(0x1f, 0x23, 0x35),
-            cursor: Rgb(0x2f, 0x35, 0x4f),
+            cursor: Rgb(0x2c, 0x31, 0x49),
             gutter: Rgb(0x4a, 0x52, 0x74),
             border: Rgb(0x4a, 0x52, 0x74),
             ..Theme::tokyonight()
@@ -247,13 +346,13 @@ impl Theme {
     pub fn tokyonight_day() -> Theme {
         Theme {
             name: "tokyonight-day".into(),
-            tint: 0.16,
+            tint: 0.11,
             bg: Rgb(0xe1, 0xe2, 0xe7),
             surface: Rgb(0xd0, 0xd5, 0xe3),
             fg: Rgb(0x37, 0x60, 0xbf),
             muted: Rgb(0x68, 0x72, 0xa1),
             gutter: Rgb(0xa8, 0xae, 0xcb),
-            cursor: Rgb(0xc4, 0xc8, 0xda),
+            cursor: Rgb(0xd2, 0xd5, 0xe3),
             border: Rgb(0xa8, 0xae, 0xcb),
             accent: Rgb(0x2e, 0x7d, 0xe9),
             source: Rgb(0x00, 0x71, 0x97),
@@ -265,6 +364,7 @@ impl Theme {
             accepted: Rgb(0x58, 0x75, 0x39),
             rejected: Rgb(0xf5, 0x2a, 0x65),
             unresolved: Rgb(0x8c, 0x6c, 0x3e),
+            syntax: SyntaxTheme::TOKYONIGHT_DAY,
         }
     }
 
@@ -290,6 +390,7 @@ impl Theme {
             accepted: Rgb(0x81, 0xc7, 0x84),
             rejected: Rgb(0xe5, 0x73, 0x73),
             unresolved: Rgb(0xff, 0xb7, 0x4d),
+            syntax: SyntaxTheme::MATERIAL_DARK,
         }
     }
 
@@ -315,10 +416,11 @@ impl Theme {
             accepted: Rgb(0x2e, 0x7d, 0x32),
             rejected: Rgb(0xc6, 0x28, 0x28),
             unresolved: Rgb(0xef, 0x6c, 0x00),
+            syntax: SyntaxTheme::MATERIAL_LIGHT,
         }
     }
 
-    fn builtin(name: &str) -> Option<Theme> {
+    pub fn builtin(name: &str) -> Option<Theme> {
         match name {
             "tokyonight" => Some(Theme::tokyonight()),
             "tokyonight-storm" => Some(Theme::tokyonight_storm()),
@@ -326,6 +428,17 @@ impl Theme {
             "dark" => Some(Theme::dark()),
             "light" => Some(Theme::light()),
             _ => None,
+        }
+    }
+
+    /// The color of a syntax token. On a tinted (diff / conflict) row the
+    /// dimmest tokens are lifted a little so they stay legible.
+    pub fn syntax_color(&self, token: Token, tinted: bool) -> Rgb {
+        let color = self.syntax.color(token);
+        if tinted && token == Token::Comment {
+            color.blend(self.fg, 0.3)
+        } else {
+            color
         }
     }
 
@@ -510,5 +623,85 @@ mod tests {
         assert!(!terminal_is_dark(Some("0;15")));
         assert!(terminal_is_dark(Some("12;default;8")));
         assert!(terminal_is_dark(None));
+    }
+
+    #[test]
+    fn syntax_colors_are_readable_on_every_builtin_background() {
+        // WCAG-style contrast ratio between a color and the background.
+        let luminance = |c: Rgb| {
+            let channel = |v: u8| {
+                let v = v as f64 / 255.0;
+                if v <= 0.03928 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(c.0) + 0.7152 * channel(c.1) + 0.0722 * channel(c.2)
+        };
+        let contrast = |a: Rgb, b: Rgb| {
+            let (hi, lo) = (
+                luminance(a).max(luminance(b)),
+                luminance(a).min(luminance(b)),
+            );
+            (hi + 0.05) / (lo + 0.05)
+        };
+        let mut failures = Vec::new();
+        for name in Theme::BUILTIN {
+            let theme = Theme::builtin(name).unwrap();
+            for token in Token::ALL {
+                // Comments are meant to recede; Tokyo Night's own sit at about 2.2.
+                let minimum = if *token == Token::Comment { 2.0 } else { 2.7 };
+                let backgrounds = [
+                    (theme.bg, false),
+                    (theme.cursor, false),
+                    (theme.tinted(theme.conflict), true),
+                    (theme.tinted(theme.added), true),
+                ];
+                for (background, tinted) in backgrounds {
+                    let ratio = contrast(theme.syntax_color(*token, tinted), background);
+                    if ratio < minimum {
+                        failures.push(format!(
+                            "{name}: {} has contrast {ratio:.2} on {background:?}",
+                            token.name()
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn syntax_colors_can_be_overridden_per_theme() {
+        let mut overrides = std::collections::BTreeMap::new();
+        overrides.insert(
+            "mine".to_owned(),
+            ThemeOverride {
+                base: Some("light".into()),
+                syntax: SyntaxOverride {
+                    keyword: Some("#112233".into()),
+                    type_: Some("#445566".into()),
+                    ..SyntaxOverride::default()
+                },
+                ..ThemeOverride::default()
+            },
+        );
+        let themes = build_themes(&overrides).unwrap();
+        let mine = themes.iter().find(|t| t.name == "mine").unwrap();
+        assert_eq!(mine.syntax.color(Token::Keyword), Rgb(0x11, 0x22, 0x33));
+        assert_eq!(mine.syntax.color(Token::Type), Rgb(0x44, 0x55, 0x66));
+        assert_eq!(
+            mine.syntax.string,
+            Theme::light().syntax.string,
+            "the rest is inherited"
+        );
+        assert_eq!(SyntaxTheme::ROLES.len(), Token::ALL.len());
+
+        overrides.get_mut("mine").unwrap().syntax.string = Some("green".into());
+        assert!(matches!(
+            build_themes(&overrides),
+            Err(ThemeError::InvalidColor(_))
+        ));
     }
 }

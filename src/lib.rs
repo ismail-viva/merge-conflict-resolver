@@ -7,6 +7,8 @@
 //! * [`git`] — where merge inputs come from and where results go
 //!   ([`git::MergeBackend`]), implemented for a git repository and for plain
 //!   files.
+//! * [`syntax`] — tree-sitter syntax highlighting into theme-independent
+//!   tokens.
 //! * [`config`] — configuration file, keymap and themes.
 //! * [`action`] — the commands a key can trigger.
 //! * [`app`] — application state and behaviour, driven by events.
@@ -18,5 +20,6 @@ pub mod app;
 pub mod config;
 pub mod core;
 pub mod git;
+pub mod syntax;
 pub mod tui;
 pub mod ui;
